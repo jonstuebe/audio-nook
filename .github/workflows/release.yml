@@ -1,0 +1,293 @@
+# Builds Audio Nook for macOS and packages it as a DMG.
+#
+# - Manual runs (workflow_dispatch) and pushes to main upload the DMG as a workflow artifact.
+# - A pushed tag vX.Y.Z also publishes a GitHub Release with the DMG attached.
+#
+# The app is signed ad-hoc unless the repository has a Developer ID certificate and notary
+# credentials (MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD),
+# in which case it is Developer ID signed, notarized and stapled. An ad-hoc build opens after the
+# Gatekeeper override the README's "Install on a Mac" describes.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The Exact commit this app is built against (README, "Set up Exact"). Bump it with the app.
+  EXACT_REPO: expo/exact
+  EXACT_SHA: 5434f4325d31fbd138e17a8021faa5e781aef1dd
+  # Exact pins Bun 1.4.2 (its package.json) and Xcode 27 (its Apple host does not build with 26).
+  BUN_VERSION: 1.4.2
+  XCODE_VERSION: '27.2'
+
+jobs:
+  macos:
+    name: Build the macOS DMG
+    # GitHub's macOS image with Xcode 27 (actions/runner-images: images/macos/xcode-27-arm64-Readme.md,
+    # announced in actions/runner-images#14404). Apple silicon, so the app is arm64.
+    runs-on: xcode-27
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        run: |
+          set -euo pipefail
+          app="/Applications/Xcode_${XCODE_VERSION}.app"
+          if [ ! -d "$app" ]; then
+            echo "::error::Xcode ${XCODE_VERSION} is not on this runner. Exact's Apple host needs Xcode 27; these are here:"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          sudo xcode-select -s "$app/Contents/Developer"
+          xcodebuild -version
+          version=$(xcodebuild -version | head -1 | awk '{print $2}')
+          case "$version" in 27.*) ;; *) echo "::error::xcodebuild reports Xcode $version, not 27"; exit 1 ;; esac
+
+      - name: Check out Audio Nook
+        uses: actions/checkout@v4
+        with:
+          path: audio-nook
+
+      # The app finds Exact at ../../exact from app/ (its exact.mjs), so the two sit side by side.
+      - name: Check out Exact at its pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.EXACT_REPO }}
+          ref: ${{ env.EXACT_SHA }}
+          path: exact
+
+      - name: Set up Bun ${{ env.BUN_VERSION }}
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # Everything `exact setup` installs, keyed on the Exact commit: the pinned Rust toolchains,
+      # cargo's registry and installed tools (wasm-bindgen), the Hermes bundles, Binaryen, Bun's
+      # packages, and Exact's own target directory.
+      - name: Cache Exact's toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+            ~/.bun/install/cache
+            exact/node_modules
+            exact/target
+          key: exact-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
+
+      # The app's own build: the generated workspace's crates and Swift build, keyed on the app's
+      # sources too, falling back to the last build against the same Exact commit.
+      - name: Cache the app's build
+        uses: actions/cache@v4
+        with:
+          path: audio-nook/app/target
+          key: app-build-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
+          restore-keys: |
+            app-build-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-
+
+      - name: Set up Exact
+        working-directory: exact
+        env:
+          # Setup also installs Playwright's Chromium unless CHROME names a browser, and Android's
+          # Rust target and Hermes bundle where an Android SDK is; a macOS build needs neither.
+          CHROME: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+          ANDROID_HOME: /nonexistent
+          ANDROID_SDK_ROOT: /nonexistent
+        run: |
+          set -euo pipefail
+          rustup --version
+          bun scripts/exact.mjs setup
+
+      - name: Build the release app
+        working-directory: audio-nook/app
+        run: |
+          set -euo pipefail
+          # The build that ships: production update trust, no development hooks. deploy.store.macos
+          # is "0" in app.json, so the app is binary-only and needs no update signing keys.
+          bun exact.mjs mac --release
+          app=$(find target/clients -maxdepth 5 -type d -path '*/macos/Audio Nook.app' | head -1)
+          if [ -z "$app" ]; then echo "::error::the build made no Audio Nook.app"; exit 1; fi
+          echo "APP_BUILT=$PWD/$app" >> "$GITHUB_ENV"
+          lipo -info "$app/Contents/MacOS/Audio Nook"
+
+      - name: Name the version
+        run: |
+          set -euo pipefail
+          plist="$APP_BUILT/Contents/Info.plist"
+          short=$(git -C audio-nook rev-parse --short HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")-${short}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "DMG_NAME=AudioNook-${version}-macos.dmg" >> "$GITHUB_ENV"
+          echo "version: $version"
+
+      - name: Stage the app
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          rm -rf "$stage" && mkdir -p "$stage"
+          ditto "$APP_BUILT" "$stage/Audio Nook.app"
+          app="$stage/Audio Nook.app"
+          plist="$app/Contents/Info.plist"
+          # A tag's version is the bundle's too (before signing: the plist is sealed by the signature).
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$plist"
+          fi
+          # What ships carries no build-machine extended attributes.
+          xattr -cr "$app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+
+      - name: Check for signing credentials
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -n "$MACOS_CERT_P12" ] && [ -n "$MACOS_CERT_PASSWORD" ] && [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+            echo "SIGNING=developer-id" >> "$GITHUB_ENV"
+            echo "Developer ID credentials found: signing, notarizing and stapling."
+          else
+            echo "SIGNING=ad-hoc" >> "$GITHUB_ENV"
+            echo "No Developer ID credentials: signing ad-hoc (Gatekeeper will ask the user to allow it)."
+          fi
+
+      - name: Sign ad-hoc
+        if: env.SIGNING == 'ad-hoc'
+        run: |
+          set -euo pipefail
+          # Inside out: the dylibs, then the bundle. No hardened runtime: an ad-hoc signature cannot be
+          # notarized, and the runtime adds nothing a user's Gatekeeper override doesn't already decide.
+          find "$APP/Contents/MacOS" -name '*.dylib' -print0 | xargs -0 -I{} codesign --force --sign - --timestamp=none "{}"
+          codesign --force --deep --sign - --timestamp=none "$APP"
+
+      - name: Sign with Developer ID
+        if: env.SIGNING == 'developer-id'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$identity" ]; then echo "::error::MACOS_CERT_P12 holds no Developer ID Application identity"; exit 1; fi
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "IDENTITY=$identity" >> "$GITHUB_ENV"
+          # Notarization requires the hardened runtime and a secure timestamp on every piece of code.
+          find "$APP/Contents/MacOS" -name '*.dylib' -print0 | xargs -0 -I{} codesign --force --options runtime --timestamp --sign "$identity" "{}"
+          codesign --force --options runtime --timestamp --sign "$identity" "$APP"
+
+      - name: Verify the signature
+        run: |
+          set -uo pipefail
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | grep -E 'Identifier|Format|Signature|Authority|TeamIdentifier|flags|Runtime' || true
+          # Gatekeeper's verdict, as a downloaded copy would get it. Expected to be rejected when ad-hoc.
+          spctl --assess --type execute --verbose=4 "$APP" || echo "spctl: rejected (expected for an ad-hoc signature)"
+
+      - name: Package the DMG
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/dmg"
+          rm -rf "$image" && mkdir -p "$image"
+          ditto "$APP" "$image/Audio Nook.app"
+          ln -s /Applications "$image/Applications"
+          mkdir -p "$RUNNER_TEMP/out"
+          dmg="$RUNNER_TEMP/out/$DMG_NAME"
+          hdiutil create -volname "Audio Nook" -srcfolder "$image" -ov -format UDZO -fs HFS+ "$dmg"
+          echo "DMG=$dmg" >> "$GITHUB_ENV"
+
+      - name: Notarize and staple
+        if: env.SIGNING == 'developer-id'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+
+      - name: Describe the DMG
+        run: |
+          set -euo pipefail
+          ls -l "$DMG"
+          shasum -a 256 "$DMG" | tee "$DMG.sha256"
+          hdiutil imageinfo "$DMG" | grep -E 'Format|Checksum Type' || true
+
+      - name: Upload the DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DMG_NAME }}
+          path: |
+            ${{ env.DMG }}
+            ${{ env.DMG }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "Audio Nook ${VERSION} for macOS (Apple silicon, macOS 26 or later)."
+            echo
+            echo "## Install"
+            echo
+            echo "1. Download \`${DMG_NAME}\` below and open it."
+            echo "2. Drag **Audio Nook** onto **Applications**."
+            if [ "$SIGNING" = "ad-hoc" ]; then
+              echo "3. This build is not notarized, so the first time you open it macOS says it can't check it:"
+              echo "   - Open **System Settings > Privacy & Security**, scroll to *Audio Nook was blocked*, click **Open Anyway** and confirm; or"
+              echo "   - in Terminal, run \`xattr -dr com.apple.quarantine \"/Applications/Audio Nook.app\"\` and open it again."
+              echo "   After that it opens like any other app."
+            else
+              echo "3. Open it from Applications. It is signed with a Developer ID and notarized."
+            fi
+            echo
+            echo "SHA-256: \`$(cut -d' ' -f1 "$DMG.sha256")\`"
+          } > "$notes"
+          gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" --repo "$GITHUB_REPOSITORY" --title "Audio Nook ${VERSION}" --notes-file "$notes" --verify-tag
+
+      - name: Remove the signing keychain
+        if: always() && env.KEYCHAIN != ''
+        run: security delete-keychain "$KEYCHAIN" || true

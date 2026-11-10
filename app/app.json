@@ -28,7 +28,8 @@
   },
   "deploy": {
     "store": {
-      "web": "0"
+      "web": "0",
+      "macos": "0"
     }
   },
   "modules": [
