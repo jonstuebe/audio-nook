@@ -37,7 +37,7 @@ const json = (body: unknown, status = 200) => Response.json(body, { status });
 const ACCESS_TTL_MS = Number(process.env.ACCESS_TTL_MS ?? 60 * 60 * 1000);
 const access = new Map<string, { username: string; expires: number }>();
 const refresh = new Map<string, string>(); // refresh token → username
-const counts = { logins: 0, refreshes: 0, refusedRefreshes: 0, logoutsWithRefreshToken: 0 };
+const counts = { logins: 0, refreshes: 0, refusedRefreshes: 0, logoutsWithRefreshToken: 0, progressBatches: 0 };
 let nextToken = 1;
 function issue(username: string) {
   const n = nextToken++;
@@ -84,7 +84,10 @@ function expanded(b: (typeof BOOKS)[number]) {
 function tracksOf(b: (typeof BOOKS)[number]) {
   let offset = 0;
   return b.tracks.map((t, i) => {
-    const track = { index: i + 1, startOffset: offset, duration: t.duration, title: t.title, contentUrl: `/api/items/${b.id}/file/${i}`, mimeType: 'audio/wav' };
+    // AudioTrack.toJSON: its file's metadata names the size (FileMetadata).
+    const size = audio.get(`${b.id}/${i}`)?.length ?? 0;
+    const track = { index: i + 1, startOffset: offset, duration: t.duration, title: t.title, contentUrl: `/api/items/${b.id}/file/${i}`, mimeType: 'audio/wav',
+      metadata: { filename: `track-${i + 1}.wav`, ext: '.wav', size } };
     offset += t.duration;
     return track;
   });
@@ -160,6 +163,14 @@ async function route(req: Request): Promise<Response> {
       refresh.clear();
       return json({ revoked: true });
     }
+    // What PATCH /api/me/progress/batch/update has been sent: 200 when `item` has been synced at
+    // or past `at` seconds, at least `batches` times.
+    if (path === '/__mock/progress') {
+      const item = url.searchParams.get('item') ?? '', at = Number(url.searchParams.get('at') ?? 0);
+      const p = progress.get(item);
+      const ok = counts.progressBatches >= Number(url.searchParams.get('batches') ?? 1) && !!p && p.currentTime >= at;
+      return json({ batches: counts.progressBatches, progress: p ?? null }, ok ? 200 : 404);
+    }
     if (path === '/__mock/auth') {
       const at = (k: keyof typeof counts) => Number(url.searchParams.get(k) ?? 0) <= counts[k];
       const ok = (Object.keys(counts) as (keyof typeof counts)[]).every(at);
@@ -179,6 +190,24 @@ async function route(req: Request): Promise<Response> {
       return b ? new Response(coverPng(b), { headers: { 'content-type': 'image/png' } }) : new Response('Not found', { status: 404 });
     }
     if (!authed(req, url)) return new Response('Unauthorized', { status: 401 });
+    // MeController.batchUpdateMediaProgress / createUpdateMediaProgress / getMediaProgress.
+    if (path === '/api/me/progress/batch/update' && method === 'PATCH') {
+      const items = (await req.json().catch(() => [])) as { libraryItemId?: string; currentTime?: number; progress?: number }[];
+      if (!Array.isArray(items) || !items.length) return new Response('Missing request payload', { status: 400 });
+      for (const it of items) if (it.libraryItemId && typeof it.currentTime === 'number') progress.set(it.libraryItemId, { currentTime: it.currentTime, progress: it.progress ?? 0, lastUpdate: Date.now() });
+      counts.progressBatches++;
+      return new Response('OK');
+    }
+    let pm = path.match(/^\/api\/me\/progress\/([^/]+)$/);
+    if (pm && method === 'PATCH') {
+      const it = (await req.json().catch(() => ({}))) as { currentTime?: number; progress?: number };
+      progress.set(pm[1], { currentTime: it.currentTime ?? 0, progress: it.progress ?? 0, lastUpdate: Date.now() });
+      return new Response('OK');
+    }
+    if (pm) {
+      const p = progressOf(pm[1]);
+      return p ? json(p) : new Response('Not Found', { status: 404 });
+    }
     if (path === '/api/me') return json({ ...USER, mediaProgress: BOOKS.map((b) => progressOf(b.id)).filter(Boolean) });
     if (path === '/api/libraries') return json({ libraries: LIBRARIES });
     let m = path.match(/^\/api\/libraries\/([^/]+)\/items$/);

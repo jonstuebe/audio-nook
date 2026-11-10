@@ -18,9 +18,9 @@ const out = `${run.stdout}\n${run.stderr}`;
 const seen = [...out.matchAll(/^sidebar (\{.*\})$/gm)].map((m) => JSON.parse(m[1]));
 const expected = [
   { collapsed: false, selected: 0, why: 'signed in: Listen Now' },
-  { collapsed: false, selected: 3, why: 'the Kids row' },
-  { collapsed: true, selected: 3, why: '⌃⌘S hides the sidebar' },
-  { collapsed: false, selected: 3, why: '⌃⌘S shows it again, Kids still selected' },
+  { collapsed: false, selected: 4, why: 'the Kids row' },
+  { collapsed: true, selected: 4, why: '⌃⌘S hides the sidebar' },
+  { collapsed: false, selected: 4, why: '⌃⌘S shows it again, Kids still selected' },
 ];
 let failed = run.status !== 0 || seen.length !== expected.length;
 expected.forEach((want, i) => {

@@ -1,0 +1,112 @@
+// Offline downloads against the mock server. The download task moves a track per step on the
+// virtual clock (`clock +300` then `clock data`); `fail fetch` takes the server away.
+
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
+test "a book downloads a track at a time, plays with no network, and its progress syncs when the server is back"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  expect text "download" == "Download"
+  tap "download"
+  clock data
+  expect state downloads.0 .state == "downloading"
+  expect state downloads.0 .tracksTotal == 2
+  expect text "download-state" == "Downloading 0%"
+  clock +300
+  clock data
+  expect state downloads.0 .tracksDone == 1
+  expect text "download-state" == "Downloading 50%"
+  clock +300
+  clock data
+  expect state downloads.0 .state == "done"
+  expect text "download-state" == "Downloaded"
+  expect tree has "download-delete"
+  back
+  clock settle
+  expect tree has "book-kept-li_dune"
+  expect tree missing "book-kept-li_hobbit"
+  tap "tab-downloads"
+  clock data
+  clock settle
+  expect text "download-title-li_dune" == "Dune"
+  fail fetch "http://127.0.0.1:13378"
+  tap "download-li_dune"
+  clock data
+  clock settle
+  expect text "detail-title" == "Dune"
+  expect text "download-state" == "Downloaded"
+  tap "play"
+  clock data
+  clock settle
+  expect state sessionId == "local:li_dune"
+  expect state media.0 == "app:/data/downloads/li_dune/track-0.wav"
+  clock +600 real
+  tap "play-pause"
+  clock +300 real
+  expect state paused == true
+  tap "forward-30"
+  clock +300 real
+  expect text "elapsed" == "1:15"
+  expect state track == 1
+  tap "play-pause"
+  clock data
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 1
+  pass fetch "http://127.0.0.1:13378"
+  tap "play-pause"
+  clock data
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=70" as reader
+
+test "a download can be cancelled, and a downloaded book removed"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-downloads"
+  clock data
+  clock settle
+  expect state downloads == []
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_hobbit"
+  clock data
+  clock settle
+  tap "download"
+  clock data
+  expect state downloads.0 .state == "downloading"
+  expect tree has "download-cancel"
+  tap "download-cancel"
+  clock data
+  expect state downloads == []
+  expect text "download" == "Download"
+  tap "download"
+  clock data
+  clock +300
+  clock data
+  clock +300
+  clock data
+  expect state downloads.0 .state == "done"
+  tap "download-delete"
+  clock data
+  expect state downloads == []
+  expect text "download" == "Download"

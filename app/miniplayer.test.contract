@@ -2,6 +2,9 @@
 // so a Mac's only. Typing at "mini-window" presses the panel's real buttons, and the panel says back
 // what it shows (`miniShown`: title | elapsed | playing or paused | floating or normal).
 
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
 test "the Mini Player opens from the player, the mini player and ⌥⌘M, and stays in step both ways" on macos
   request POST "/__mock/reset" as reader
   clock data

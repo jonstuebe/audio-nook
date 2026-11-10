@@ -3,6 +3,9 @@
 // a rotating refresh token) and legacy / listen (a pre-2.26 server's one token). Dune starts 45 s
 // into its 120 s; the server is shared by every test in a run, so a test that needs that resets it.
 
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
 test "a wrong password is refused and keeps the form"
   clock data
   expect tree has "sign-in"

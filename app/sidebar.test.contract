@@ -4,6 +4,9 @@
 // ⌃⌘S is View ▸ Show Sidebar. That the sidebar really collapses is read from the window, which a
 // test cannot see: tools/check-sidebar.mjs drives the same steps and reads `state window`.
 
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
 test "the sidebar's rows switch sections, and the page stays while ⌃⌘S hides and shows it" on macos
   clock data
   type "server" "http://127.0.0.1:13378"

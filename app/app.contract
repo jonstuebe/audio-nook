@@ -11,6 +11,7 @@ routes nav
     item "/item/:id"
     player "/player"
   tab search "/search"
+  tab downloads "/downloads"
   tab library "/library"
 
 shape Session
@@ -49,6 +50,28 @@ shape SearchResults
   query: string
   books: Book[]
   authors: Author[]
+
+// A book kept in app storage (offline.ts): downloading a track at a time, done, or failed.
+shape DownloadInfo
+  id: string
+  title: string
+  author: string
+  cover: string
+  duration: number
+  state: string
+  error: string
+  tracksDone: number
+  tracksTotal: number
+  progress: number
+  listened: number
+
+shape DownloadStep
+  ok: bool
+  error: string
+  finished: bool
+
+shape Pending
+  count: number
 
 shape Detail
   id: string
@@ -94,6 +117,10 @@ fn chapterStart(chapters: Chapter[], i: number): number = match chapters.at(i) {
 fn rateText(r: number): string = `${r}×`
 // Which panel shows a tab's stack: a library's own for the library tab.
 fn holds(panel: string, tab: string, library: string): bool = tab == "library" ? panel == `library-${library}` : panel == tab
+fn dlState(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.state).join("")
+fn dlProgress(downloads: DownloadInfo[], id: string): number = sum(downloads.filter(d => d.id == id).map(d => d.progress))
+fn dlError(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.error).join("")
+fn percentText(p: number): string = `${round(p * 100)}%`
 fn nameOf(libraries: Library[], id: string): string = libraries.filter(l => l.id == id).map(l => l.name).join("")
 
 component App
@@ -130,14 +157,23 @@ component App
   resource continuing = inProgress(api, currentLibrary) as shape Book[] else empty()
   derive selected = match stack(nav).filter(e => e.name == "item").at(-1) { case some(e) => e.params.id, case none => "" }
   resource detail = itemDetail(api, selected) as shape Detail else empty()
-  derive panels = ["home", "search"].concat(libraries.map(l => `library-${l.id}`))
+  derive panels = ["home", "search", "downloads"].concat(libraries.map(l => `library-${l.id}`))
   resource results = search(api, currentLibrary, query) as shape SearchResults else empty()
 
   mutation loggedIn as shape Reply refreshes session, libraries, books, continuing, detail
   mutation loggedOut as shape Reply refreshes session
   mutation started as shape PlaySession then afterStart
-  mutation synced as shape Reply queue
-  mutation closed as shape Reply queue refreshes continuing, books, detail
+  mutation synced as shape Reply queue refreshes pending
+  mutation closed as shape Reply queue refreshes continuing, books, detail, pending, downloads
+  // Downloads: what is kept, one track fetched per step, and progress waiting for the server.
+  resource downloads = downloads(api) as shape DownloadInfo[] else empty()
+  resource pending = pendingSync(api) as shape Pending else empty()
+  mutation dlStarted as shape Reply refreshes downloads
+  mutation dlStepped as shape DownloadStep refreshes downloads
+  mutation dlRemoved as shape Reply refreshes downloads
+  mutation flushed as shape Pending refreshes pending, continuing, books
+  derive activeDownload = match first(downloads.filter(d => d.state == "downloading")) { case some(d) => d.id, case none => "" }
+  derive keptBooks = downloads.map(d => Book(id=d.id, title=d.title, author=d.author, cover=d.cover, duration=d.duration, progress=d.listened))
   mutation renewed as shape Reply then afterRenew
 
   derive loginError = match loggedIn { case some(r) => r.error, case none => "" }
@@ -161,6 +197,13 @@ component App
   derive sessionEnded = session.ended or (session.signedIn and not pending(loggedIn) and (librariesCode == "signed-out" or booksCode == "signed-out" or continuingCode == "signed-out" or detailCode == "signed-out" or renewSignedOut))
   derive showSignIn = not session.signedIn or sessionEnded
   derive chapter = chapterAt(chapters, position)
+
+  // A download moves a track per step while one is in progress.
+  task fetchTracks when activeDownload != ""
+    every(250, pumpDownload)
+  // Progress kept while offline goes to the server as soon as it answers.
+  task sendQueued when pending.count > 0 and session.signedIn
+    every(30000, flushNow)
 
   // Every 15 s of playback the server hears where we are (ABS's own clients sync about as often).
   task sync when playing and not paused
@@ -306,6 +349,18 @@ component App
     stopPlayback()
     nav = back(nav)
 
+  action download(id: string)
+    if not pending(dlStarted)
+      send dlStarted = startDownload(id)
+  action pumpDownload
+    if activeDownload != "" and not pending(dlStepped)
+      send dlStepped = downloadNext(activeDownload)
+  action removeKept(id: string)
+    send dlRemoved = removeDownload(id)
+  action flushNow
+    if not pending(flushed)
+      send flushed = flushProgress()
+
   // Window ▸ Mini Player (⌥⌘M), and the buttons on the mini player and the player.
   action toggleMiniWindow
     miniWindow = not miniWindow
@@ -363,7 +418,7 @@ component App
                         else
                           column gap=14
                             text "Continue Listening" font="-exact-title2" font-weight=700
-                            BookGrid(books=continuing, prefix="continue")
+                            BookGrid(books=continuing, prefix="continue", downloads=downloads)
                 if e.name == "search"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -390,7 +445,7 @@ component App
                           if results.books.length > 0
                             column gap=14
                               text "Books" font="-exact-title2" font-weight=700
-                              BookGrid(books=results.books, prefix="result")
+                              BookGrid(books=results.books, prefix="result", downloads=downloads)
                 if e.name == "library"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -405,7 +460,18 @@ component App
                         else if books.length == 0 and not pending(books) and not pending(libraries)
                           EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
                         else
-                          BookGrid(books=books, prefix="book")
+                          BookGrid(books=books, prefix="book", downloads=downloads)
+                if e.name == "downloads"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" gap=8 padding="8px 16px"
+                      text "Downloads" role="heading" aria-level=1 flex=1
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      column gap=28 padding="28px 32px 120px"
+                        LargeTitle(title="Downloads", subtitle=(pending.count > 0 ? `${pending.count} ${pending.count == 1 ? "book's" : "books’"} progress waiting to sync` : "Books you can listen to without a connection"))
+                        if downloads.length == 0 and not pending(downloads)
+                          EmptyState(symbol="symbol:download", title="No Downloads", message="Download a book from its page to listen without a connection.")
+                        else
+                          BookGrid(books=keptBooks, prefix="download", downloads=downloads)
                 if e.name == "item"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -417,7 +483,9 @@ component App
                     else
                       scroll id=`scroll-${e.id}` flex=1 min-height=0
                         if detail.id == e.params.id
-                          ItemDetail(item=detail, play=play(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id), seekChapter=seek)
+                          ItemDetail(item=detail, play=play(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id), seekChapter=seek,
+                            dlState=dlState(downloads, detail.id), dlProgress=dlProgress(downloads, detail.id), dlError=dlError(downloads, detail.id),
+                            download=download(detail.id), removeDownload=removeKept(detail.id), starts=pending(dlStarted))
                 if e.name == "player"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -495,6 +563,9 @@ component App
         button role="tab" aria-controls="panel-search" aria-selected=(nav.tab == "search") press=showTab("search") testId="tab-search" flex=1
           image "symbol:search"
           text "Search"
+        button role="tab" aria-controls="panel-downloads" aria-selected=(nav.tab == "downloads") press=showTab("downloads") testId="tab-downloads" flex=1
+          image "symbol:download"
+          text "Downloads"
         for l in libraries key=l.id
           button role="tab" aria-controls=`panel-library-${l.id}` aria-selected=(nav.tab == "library" and currentLibrary == l.id)
             press=showLibrary(l.id) testId=`tab-library-${l.id}` flex=1
@@ -578,15 +649,18 @@ component BookGrid
   props
     books: Book[]
     prefix: string
+    downloads: DownloadInfo[]
   view
     column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
       for b in books key=b.id
-        BookCard(book=b, prefix=prefix)
+        BookCard(book=b, prefix=prefix, dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id))
 
 component BookCard
   props
     book: Book
     prefix: string
+    dlState: string
+    dlProgress: number
   view
     link href=path("item", book.id) aria-label=`${book.title}, ${book.author}` testId=`${prefix}-${book.id}`
       column gap=4 min-width=0
@@ -598,6 +672,15 @@ component BookCard
           if book.progress > 0 and book.progress < 1
             progress value=book.progress max=1 width="3rem"
           text progressText(book.progress) font="-exact-caption1" color="-exact-secondary-label" testId=`${prefix}-progress-${book.id}`
+        // Kept for offline listening, or on its way.
+        if dlState == "done"
+          row gap=4 align-items="center" testId=`${prefix}-kept-${book.id}`
+            image "symbol:download" font-size=11 color="-exact-secondary-label"
+            text "Downloaded" font="-exact-caption1" color="-exact-secondary-label"
+        else if dlState == "downloading"
+          row gap=6 align-items="center" testId=`${prefix}-downloading-${book.id}`
+            progress value=dlProgress max=1 width="3rem"
+            text `Downloading ${percentText(dlProgress)}` font="-exact-caption1" color="-exact-secondary-label"
 
 component ItemDetail
   props
@@ -606,6 +689,12 @@ component ItemDetail
     starting: bool
     isCurrent: bool
     seekChapter: action
+    dlState: string
+    dlProgress: number
+    dlError: string
+    download: action
+    removeDownload: action
+    starts: bool
   view
     column gap=28 padding="32px 32px 120px" max-width="56rem"
       row gap=32 align-items="flex-end" flex-wrap="wrap"
@@ -616,10 +705,28 @@ component ItemDetail
           text `By ${item.author}` font="-exact-title3" testId="detail-author"
           text (item.narrator == "" ? "" : `Narrated by ${item.narrator}`) color="-exact-secondary-label" testId="detail-narrator"
           text `${lengthText(item.duration)} · ${item.chapters.length} ${item.chapters.length == 1 ? "chapter" : "chapters"} · ${progressText(item.progress)}` color="-exact-secondary-label" testId="detail-meta"
-          row padding-top=12 flex-wrap="wrap"
+          row padding-top=12 gap=10 flex-wrap="wrap" align-items="center"
             button press=play disabled=starting buttonStyle="filled" testId="play"
               image "symbol:play-fill"
               text (starting ? "Starting…" : isCurrent ? "Resume" : item.currentTime > 0 ? "Continue" : "Play")
+            if dlState == "done"
+              row gap=6 align-items="center"
+                image "symbol:download" color="-exact-secondary-label"
+                text "Downloaded" color="-exact-secondary-label" testId="download-state"
+              button press=removeDownload destructive=true testId="download-delete"
+                text "Remove Download"
+            else if dlState == "downloading"
+              row gap=8 align-items="center"
+                progress value=dlProgress max=1 width="8rem" testId="download-progress"
+                text `Downloading ${percentText(dlProgress)}` color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="download-state"
+              button press=removeDownload testId="download-cancel"
+                text "Cancel"
+            else
+              button press=download disabled=starts buttonStyle="bordered" testId="download"
+                image "symbol:download"
+                text (starts ? "Preparing…" : dlState == "failed" ? "Try Download Again" : "Download")
+          if dlState == "failed"
+            text dlError color="-exact-system-red" font="-exact-footnote" testId="download-error"
       column gap=8
         text "About" font="-exact-title3" font-weight=700
         text item.description line-height=1.45 testId="detail-description"

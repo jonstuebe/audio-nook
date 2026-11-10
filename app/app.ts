@@ -1,6 +1,7 @@
 // Audio Nook's data module: every call to the Audiobookshelf server, and the sign-in it keeps.
 // The view sees no token except in the audio URLs `trackUrls` builds; covers need none.
-import type { Answer, Result, Sources, Store } from './app.contract.d.ts';
+import type { Answer, Result, Sources, Storage, Store } from './app.contract.d.ts';
+import * as offline from './offline.ts';
 
 // The mock server the tests run (mock/server.ts, `bun exact.mjs test` starts it here). The app
 // itself talks to whatever server the person signs in to.
@@ -11,6 +12,9 @@ export const MOCK_SERVER = 'http://127.0.0.1:13378';
 export const grants = [
   'net.fetch http:', 'net.fetch https:',
   'secret.keep abs-server', 'secret.keep abs-token', 'secret.keep abs-refresh', 'secret.keep abs-user', 'secret.keep abs-ended',
+  // offline.ts: downloaded books, and progress waiting for the server.
+  'fs.read app:/data/downloads', 'fs.write app:/data/downloads',
+  'fs.read app:/data/progress-queue.json', 'fs.write app:/data/progress-queue.json',
 ].join('\n');
 
 type Book = Result<'libraryItems'>[number];
@@ -79,6 +83,22 @@ const send = (server: string, token: string, path: string, init: RequestInit) =>
     exactTimeout: 15000,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   } as RequestInit);
+
+// One authorised request as a raw Response (a download to a file, a PATCH with no body back),
+// refreshed and asked once more on a 401, as `api` is.
+async function authed(store: Store, path: string, init: RequestInit = {}): Promise<Response> {
+  const s = signedIn(store);
+  if (!s) throw signedOut();
+  const url = /^https?:/.test(path) ? path : `${s.server}${path}`;
+  const go = (token: string) => fetch(url, {
+    exactTimeout: 15000,
+    ...init,
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  } as RequestInit);
+  const res = await go(s.token);
+  return res.status === 401 ? go(await refreshAccess(store)) : res;
+}
+const authedFor = (store: Store): offline.Authed => (path, init) => authed(store, path, init);
 
 // One authorised request. A 401 refreshes the access token and asks once more; a refresh the
 // server refuses signs out. A failed status throws, which fails the resource.
@@ -213,7 +233,32 @@ const sources: Sources = {
 
   // The audio URLs for a session's tracks, with the access token held now (`gen` is the player's
   // count of renewals, so a renewal asks again).
-  trackUrls: ([paths], store) => paths.map((p) => (/^https?:/.test(p) ? p : withToken(store, p))),
+  trackUrls: ([paths], store) => paths.map((p) => (/^(https?|app):/.test(p) ? p : withToken(store, p))),
+
+  // Downloads: what is kept, and each step of fetching it (offline.ts).
+  downloads: async (_args, _store, storage) => Object.values(await offline.index(storage)).map(downloadInfo),
+  startDownload: async ([id], store, storage): Promise<Reply> => {
+    try {
+      await offline.plan(storage, authedFor(store), id);
+      return ok;
+    } catch (e) {
+      return refused((e as Error).message);
+    }
+  },
+  downloadNext: async ([id], store, storage) => {
+    try {
+      return { ok: true, error: '', finished: (await offline.step(storage, authedFor(store), id)).finished };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message, finished: false };
+    }
+  },
+  removeDownload: async ([id], _store, storage): Promise<Reply> => {
+    await offline.remove(storage, id);
+    return ok;
+  },
+  pendingSync: async (_args, _store, storage) => ({ count: await offline.queued(storage) }),
+  flushProgress: async (_args, store, storage) => ({ count: signedIn(store) ? await offline.flush(storage, authedFor(store)) : await offline.queued(storage) }),
+
 
   libraries: async ([server], store) => {
     if (!server) return [];
@@ -259,10 +304,20 @@ const sources: Sources = {
     return { query: q, books, authors: (body.authors ?? []).map((x) => ({ id: str(x.id), name: str(x.name) })) };
   },
 
-  itemDetail: async ([server, id], store) => {
+  itemDetail: async ([server, id], store, storage) => {
     const empty = { id: '', title: '', author: '', narrator: '', description: '', cover: '', duration: 0, progress: 0, currentTime: 0, chapters: [] };
     if (!server || !id) return empty;
-    const i = (await api(store, `/api/items/${encodeURIComponent(id)}?expanded=1&include=progress`)) as Item & {
+    // A downloaded book opens with no network, from what was kept with it.
+    const kept = (await offline.index(storage))[id];
+    let fetched: unknown;
+    try {
+      fetched = await api(store, `/api/items/${encodeURIComponent(id)}?expanded=1&include=progress`);
+    } catch (e) {
+      if (!kept || kept.state !== 'done' || (e as { reason?: string }).reason === 'signed-out') throw e;
+      return { id, title: kept.title, author: kept.author, narrator: kept.narrator, description: kept.description, cover: kept.cover,
+        duration: kept.duration, progress: kept.duration ? kept.position / kept.duration : 0, currentTime: kept.position, chapters: kept.chapters };
+    }
+    const i = fetched as Item & {
       media: { chapters?: unknown[] };
       userMediaProgress?: Progress | null;
     };
@@ -283,7 +338,22 @@ const sources: Sources = {
     };
   },
 
-  startPlayback: async ([id], store) => {
+  startPlayback: async ([id], store, storage) => {
+    // A downloaded book plays from its files, with no session on the server: its progress is
+    // queued and sent as the server allows (syncSession below).
+    const kept = (await offline.index(storage))[id];
+    if (kept?.state === 'done') {
+      let at = kept.position;
+      try {
+        const p = (await api(store, `/api/me/progress/${encodeURIComponent(id)}`)) as Progress | null;
+        if (p && num(p.currentTime) > at) at = num(p.currentTime);
+      } catch {}
+      return {
+        id: `local:${id}`, itemId: id, title: kept.title, author: kept.author, cover: kept.cover, duration: kept.duration,
+        currentTime: at, chapters: kept.chapters,
+        tracks: kept.tracks.map((t, i) => ({ index: i, startOffset: t.startOffset, duration: t.duration, path: t.file })),
+      };
+    }
     const s = (await api(store, `/api/items/${encodeURIComponent(id)}/play`, {
       method: 'POST',
       body: JSON.stringify({
@@ -314,7 +384,8 @@ const sources: Sources = {
     };
   },
 
-  syncSession: async ([sessionId, currentTime, timeListened, duration], store): Promise<Reply> => {
+  syncSession: async ([sessionId, currentTime, timeListened, duration], store, storage): Promise<Reply> => {
+    if (sessionId.startsWith('local:')) return keepLocal(store, storage, sessionId.slice(6), currentTime, duration);
     try {
       await api(store, `/api/session/${encodeURIComponent(sessionId)}/sync`, { method: 'POST', body: JSON.stringify({ currentTime, timeListened, duration }) });
       return ok;
@@ -323,7 +394,8 @@ const sources: Sources = {
     }
   },
 
-  closeSession: async ([sessionId, currentTime, timeListened, duration], store): Promise<Reply> => {
+  closeSession: async ([sessionId, currentTime, timeListened, duration], store, storage): Promise<Reply> => {
+    if (sessionId.startsWith('local:')) return keepLocal(store, storage, sessionId.slice(6), currentTime, duration);
     try {
       await api(store, `/api/session/${encodeURIComponent(sessionId)}/close`, { method: 'POST', body: JSON.stringify({ currentTime, timeListened, duration }) });
       return ok;
@@ -332,5 +404,24 @@ const sources: Sources = {
     }
   },
 };
+
+// A downloaded book's place: kept beside it, and queued for the server.
+async function keepLocal(store: Store, storage: Storage, id: string, currentTime: number, duration: number): Promise<Reply> {
+  await offline.remember(storage, id, currentTime);
+  const progress = duration ? Math.min(1, currentTime / duration) : 0;
+  await offline.queue(storage, authedFor(store), { libraryItemId: id, currentTime, duration, progress, isFinished: progress >= 0.999 });
+  return ok;
+}
+
+function downloadInfo(e: offline.Entry) {
+  const total = e.tracks.reduce((s, t) => s + (t.size || 1), 0);
+  const done = e.tracks.reduce((s, t) => s + (t.done ? t.size || 1 : 0), 0);
+  return {
+    id: e.id, title: e.title, author: e.author, cover: e.cover, duration: e.duration, state: e.state, error: e.error,
+    tracksDone: e.tracks.filter((t) => t.done).length, tracksTotal: e.tracks.length,
+    progress: e.state === 'done' ? 1 : total ? done / total : 0,
+    listened: e.duration ? Math.min(1, e.position / e.duration) : 0,
+  };
+}
 
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);

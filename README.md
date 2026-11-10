@@ -12,6 +12,8 @@ it says otherwise.
 | `app/app.contract` | The view, its state and actions: sign-in, sidebar sections, cover grids, search, item detail, player, mini player |
 | `app/app.ts` | Every Audiobookshelf API call, and the sign-in kept in the Keychain |
 | `app/app.test.contract` | The tests, run against the mock server on every host |
+| `app/offline.ts` | Offline listening: downloads into app storage, and progress queued for the server |
+| `app/downloads.test.contract` | Download, cancel, remove, play with no network, sync when back |
 | `app/miniplayer.test.contract` | The Mini Player window (macOS only) |
 | `app/modules/apple/MiniPlayer.swift`, `app/modules/web/index.js` | The app's native module: the Mini Player window (`nook-mini-player`) |
 | `app/tools/test-all.sh` | Every test file on web, macOS, and macOS under the platform's chrome, plus the window checks |
@@ -103,6 +105,11 @@ The tests cover:
   the library chosen in the sidebar, and a result opens its detail.
 - **Mini player:** it shows while you browse other sections, plays, pauses and skips, and opens the
   player.
+- **Downloads** (both hosts): download Dune track by track (0%, 50%, Downloaded). The grid
+  badge shows it, and the Downloads row lists it. With the server cut off (`fail fetch`), it
+  opens and plays from `app:/data` files at the saved position, and its progress waits in the
+  queue. When the server answers again, the queue is sent and the mock confirms the position.
+  Cancelling mid-download and Remove Download both delete it.
 - **Mini Player window** (macOS): opens from the player, the mini player and ⌥⌘M. Its own buttons
   (typed at it by the agent, which presses the real `NSButton`s) play, pause, skip, change chapter,
   seek and float. It says back what it shows, which the test compares with the main player's state
@@ -232,6 +239,24 @@ colours and fonts.
   - The scrubber, ±30 s, previous/next chapter, a chapter tap and speed (0.75×–2×) all work this
     way.
   - It is the system's Now Playing app (media keys, Control Center).
+- **Downloads:** Download on a book's page plans the book with
+  `GET /api/items/:id?expanded=1&include=progress`. It keeps the metadata, chapters, cover, track
+  list (each track's `contentUrl` and `metadata.size`) and where the listener is, in
+  `app:/data/downloads/index.json`. A task then fetches one track per step. Each track is a
+  `fetch` with `exactBodyTo: "app:/data/downloads/<id>/track-<n>"`, so the host writes the bytes
+  straight to the file (staged, replaced only when complete). Progress shows on the page and on
+  the book's cover in every grid, track by track, weighted by size. Cancel aborts the track in
+  flight and deletes what was fetched; Remove Download deletes the files. The Downloads row lists
+  what's kept.
+- **Offline playback:** a downloaded book always plays from its files, with no server session.
+  It opens at the later of the kept position and the server's
+  (`GET /api/me/progress/:id`, when reachable), and its detail page opens from the kept metadata
+  when the server can't be reached.
+- **Queued progress:** a downloaded book's syncs go to `app:/data/progress-queue.json`, one entry
+  a book, newest wins. They are sent with `PATCH /api/me/progress/batch/update`
+  (`MeController.batchUpdateMediaProgress`: `[{libraryItemId, currentTime, duration, progress,
+  isFinished}]`) on every sync, and every 30 s while anything waits. What the server can't take
+  stays queued.
 - **Sync:** `POST /api/session/:id/sync` every 15 s while playing, and on resume. It sends
   `currentTime`, `timeListened` (capped at 60 s) and `duration`. `POST /api/session/:id/close`
   runs on Stop, on starting another book, and on sign-out.
@@ -245,6 +270,8 @@ colours and fonts.
 | Library cover grid with title, author, cover, progress | Done |
 | Search the chosen library | Done (toolbar search field on the Search page) |
 | Mini player while browsing | Done (Liquid Glass) |
+| Mini Player window | Done on macOS (a native module's `NSPanel`) |
+| Offline downloads: progress, cancel, delete, Downloads row, offline playback, queued sync | Done (progress per track, while the app runs) |
 | Continue Listening | Done (`/api/me/items-in-progress`) |
 | Item detail: title, author, narrator, description, duration, chapters | Done |
 | Playback: session, streaming, play/pause, ±30 s, chapters, scrubber, speed | Done |
@@ -269,7 +296,13 @@ colours and fonts.
 - **`timeListened` is approximate.** It is computed from the position moved between syncs (capped
   at 60 s), not from wall-clock listening time: Exact's data module refuses the clock, and Contract
   has no wall time without `exactTime()`.
-- **No offline downloads, bookmarks, podcasts, or author/series pages.** Podcast libraries list their items, but
+- **Downloads run while the app runs.** Tracks are fetched by the data module (`fetch` with
+  `exactBodyTo`), so quitting stops a download; it resumes at the next undone track when the app
+  runs again. `@exact/background-transfer` would let the system finish it, but it is unsupported
+  on the web, and its events arrive in wakes that a driven test can't make.
+- **Download progress moves a track at a time.** `exactBodyTo` reports the bytes written once the
+  file is complete, not as they arrive. A single-file book shows 0% until done.
+- **No bookmarks, podcasts, or author/series pages.** Podcast libraries list their items, but
   episodes aren't handled.
 - **SF Symbols on the web.** Headphones, books and previous/next chapter use `app.tamber` icon
   tokens: the SF Symbol on Apple, an SVG elsewhere. Every other symbol is one of Exact's built-in
