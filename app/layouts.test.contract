@@ -1,0 +1,217 @@
+// Listen Now's shelves, a library's four views, its grid and list, sort, filter and paging, and
+// the author, series and collection pages, against the mock server's fixtures.
+
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
+test "Listen Now shows ABS's personalized shelves of books, series and authors"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect text "shelf-title-continue-listening" == "Continue Listening"
+  expect text "continue-title-li_dune" == "Dune"
+  expect text "shelf-title-recently-added" == "Recently Added"
+  expect state home.shelves.1 .books.0 .id == "li_messiah"
+  expect tree has "recent-li_martian"
+  expect text "shelf-title-discover" == "Discover"
+  expect tree has "discover-li_hobbit"
+  expect tree missing "discover-li_dune"
+  expect text "shelfseries-name-se_dune" == "Dune Chronicles"
+  expect text "shelfauthor-name-au_herbert" == "Frank Herbert"
+  tap "shelfauthor-au_herbert"
+  clock data
+  clock settle
+  expect text "author-title" == "Frank Herbert"
+  back
+  clock settle
+  tap "recent-li_messiah"
+  clock data
+  clock settle
+  expect text "detail-title" == "Dune Messiah"
+
+test "a library's books sort, filter, switch between grid and list, and page as you go"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect text "page-subtitle" == "4 books"
+  expect state page.books.0 .id == "li_dune"
+  tap "sort-button"
+  clock settle
+  tap "sort-added"
+  clock data
+  expect state sortKey == "added"
+  expect state page.books.0 .id == "li_messiah"
+  tap "sort-button"
+  clock settle
+  tap "sort-author"
+  clock data
+  expect state page.books.0 .id == "li_martian"
+  tap "filter-button"
+  clock settle
+  tap "filter-in-progress"
+  clock data
+  expect text "page-subtitle" == "1 book · In Progress"
+  expect tree has "book-li_dune"
+  expect tree missing "book-li_hobbit"
+  tap "filter-button"
+  clock settle
+  tap "filter-finished"
+  clock data
+  expect tree missing "book-li_dune"
+  tap "filter-clear"
+  clock data
+  expect state filterKey == "all"
+  expect tree has "book-li_hobbit"
+  tap "filter-button"
+  clock settle
+  tap "filter-not-started"
+  clock data
+  expect state page.total == 3
+  expect tree missing "book-li_dune"
+  tap "filter-button"
+  clock settle
+  tap "filter-all"
+  clock data
+  expect tree missing "book-list"
+  tap "layout-button"
+  clock settle
+  expect state layout == "list"
+  expect tree has "book-list"
+  expect text "book-progress-li_dune" == "38% listened"
+  tap "book-li_dune"
+  clock data
+  clock settle
+  expect text "detail-title" == "Dune"
+  back
+  clock settle
+  tap "layout-button"
+  tap "tab-library-lib_archive"
+  clock data
+  clock settle
+  tap "sort-button"
+  clock settle
+  tap "sort-title"
+  clock data
+  expect text "page-subtitle" == "60 books"
+  expect tree has "book-li_archive_24"
+  expect tree missing "book-li_archive_25"
+  expect text "load-more" == "Show More (36 more)"
+  expect state pages == 1
+  tap "page-title" wheel 0 6000
+  clock data
+  clock settle
+  expect tree has "book-li_archive_48"
+  tap "book-li_archive_40" wheel 0 6000
+  clock data
+  clock settle
+  expect state pages == 3
+  expect tree has "book-li_archive_60"
+  expect tree missing "load-more"
+
+test "the downloaded filter lists only what is kept, from app storage"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_martian"
+  clock data
+  clock settle
+  tap "download"
+  clock data
+  clock +300
+  clock data
+  expect state downloads.0 .state == "done"
+  back
+  clock settle
+  tap "filter-button"
+  clock settle
+  tap "filter-downloaded"
+  clock data
+  expect text "page-subtitle" == "1 book · Downloaded"
+  expect tree has "book-li_martian"
+  expect tree missing "book-li_dune"
+
+test "series, authors and collections each have a page, and a page of its own per series, author and collection"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "view-series"
+  clock data
+  expect state libraryView == "series"
+  expect text "series-name-se_dune" == "Dune Chronicles"
+  expect text "series-name-se_middle" == "Middle-earth"
+  tap "series-se_dune"
+  clock data
+  clock settle
+  expect text "page-title" == "Dune Chronicles"
+  expect state seriesPage.entries.0 .book.id == "li_dune"
+  expect state seriesPage.entries.1 .book.id == "li_messiah"
+  expect text "series-caption-li_messiah" == "Book 2"
+  back
+  clock settle
+  tap "view-authors"
+  clock data
+  expect text "author-name-au_herbert" == "Frank Herbert"
+  expect tree missing "author-au_donaldson"
+  tap "author-au_herbert"
+  clock data
+  clock settle
+  expect text "author-title" == "Frank Herbert"
+  expect text "author-count" == "2 books"
+  expect text "author-bio" == "American science-fiction author best known for Dune and its sequels."
+  expect state authorPage.image == "http://127.0.0.1:13378/api/authors/au_herbert/image"
+  expect tree has "authorbook-li_messiah"
+  tap "authorseries-se_dune"
+  clock data
+  clock settle
+  expect text "page-title" == "Dune Chronicles"
+  back
+  clock settle
+  back
+  clock settle
+  tap "author-au_tolkien"
+  clock data
+  clock settle
+  expect state authorPage.image == ""
+  back
+  clock settle
+  tap "view-collections"
+  clock data
+  expect text "collection-name-co_scifi" == "Sci-Fi Favorites"
+  tap "collection-co_scifi"
+  clock data
+  clock settle
+  expect text "page-title" == "Sci-Fi Favorites"
+  expect tree has "collectionbook-li_martian"
+  expect tree missing "collectionbook-li_hobbit"
+  back
+  clock settle
+  tap "view-books"
+  clock data
+  expect tree has "book-li_hobbit"

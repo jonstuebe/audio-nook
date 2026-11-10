@@ -17,7 +17,7 @@ export const grants = [
   'fs.read app:/data/progress-queue.json', 'fs.write app:/data/progress-queue.json',
 ].join('\n');
 
-type Book = Result<'libraryItems'>[number];
+type Book = Result<'libraryItems'>['books'][number];
 type Chapter = Result<'itemDetail'>['chapters'][number];
 type Reply = Result<'login'>;
 
@@ -151,6 +151,44 @@ async function progressMap(store: Store): Promise<Map<string, Progress>> {
   return new Map((me.mediaProgress ?? []).map((p) => [p.libraryItemId, p]));
 }
 
+// The view's sort words, as ABS's `sort` keys (libraryItemsBookFilters.getSortOrder) and direction.
+const SORTS: Record<string, [string, boolean]> = {
+  title: ['media.metadata.title', false],
+  author: ['media.metadata.authorName', false],
+  added: ['addedAt', true],
+  progress: ['progress', true],
+};
+// libraryFilters.decode reads a filter's value as base64: `progress.` + one of these.
+const FILTERS: Record<string, string> = { 'in-progress': 'aW4tcHJvZ3Jlc3M=', finished: 'ZmluaXNoZWQ=', 'not-started': 'bm90LXN0YXJ0ZWQ=' };
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + (i + 1 < bytes.length ? B64[(n >> 6) & 63] : '=') + (i + 2 < bytes.length ? B64[n & 63] : '=');
+  }
+  return out;
+}
+function sortLocally(books: Book[], sort: string): Book[] {
+  const key = (b: Book) => (sort === 'author' ? b.author.toLowerCase() : sort === 'progress' ? -b.progress : b.title.toLowerCase());
+  return [...books].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+type AuthorBody = { id: string; name?: string; description?: string | null; imagePath?: string | null; numBooks?: number };
+type SeriesBody = { id: string; name?: string; books?: Item[] };
+type CollectionBody = { id: string; name?: string; description?: string | null; books?: Item[] };
+// An author's photo needs no auth (Auth.js `ignorePatterns`); one without a photo has no URL.
+const authorImage = (store: Store, a: AuthorBody) => (a.imagePath ? `${store.get('abs-server') ?? ''}/api/authors/${encodeURIComponent(a.id)}/image` : '');
+const authorCard = (store: Store, a: AuthorBody) => ({ id: a.id, name: str(a.name), image: authorImage(store, a), count: num(a.numBooks) });
+const seriesCard = (store: Store, x: SeriesBody) => ({
+  id: x.id, name: str(x.name), count: (x.books ?? []).length, covers: (x.books ?? []).slice(0, 3).map((b) => coverUrl(store, b.id)),
+});
+const sequenceOf = (i: Item) => {
+  const s = (i.media.metadata as { series?: { sequence?: string } | { sequence?: string }[] }).series;
+  return str(Array.isArray(s) ? s[0]?.sequence : s?.sequence);
+};
+
 function book(store: Store, i: Item, progress: Map<string, Progress>): Book {
   const m = i.media.metadata, p = progress.get(i.id);
   return {
@@ -266,22 +304,104 @@ const sources: Sources = {
     return (body.libraries ?? []).map((l) => ({ id: l.id, name: l.name }));
   },
 
-  libraryItems: async ([server, libraryId], store) => {
-    if (!server || !libraryId) return [];
+  // LibraryController.getLibraryItems: `sort`, `desc`, `filter` (group.<base64 value>, as
+  // libraryFilters.decode reads it), `limit` and `page`; `total` counts what the filter keeps.
+  // Downloaded is the app's own filter, answered from what is kept, with no network.
+  libraryItems: async ([server, libraryId, sort, filter, limit], store, storage) => {
+    if (!server || !libraryId) return { total: 0, books: [] };
+    if (filter === 'downloaded') {
+      const kept = Object.values(await offline.index(storage)).filter((e) => e.libraryId === libraryId && e.state === 'done');
+      const books = kept.map((e) => ({ id: e.id, title: e.title, author: e.author, cover: e.cover, duration: e.duration, progress: e.duration ? Math.min(1, e.position / e.duration) : 0 }));
+      return { total: books.length, books: sortLocally(books, sort) };
+    }
+    const [key, desc] = SORTS[sort] ?? SORTS.title;
+    const query = new URLSearchParams({ sort: key, desc: desc ? '1' : '0', limit: String(limit), page: '0', minified: '1' });
+    if (FILTERS[filter]) query.set('filter', `progress.${FILTERS[filter]}`);
     const [body, progress] = await Promise.all([
-      api(store, `/api/libraries/${encodeURIComponent(libraryId)}/items?sort=media.metadata.title&minified=1`) as Promise<{ results?: Item[] }>,
+      api(store, `/api/libraries/${encodeURIComponent(libraryId)}/items?${query}`) as Promise<{ results?: Item[]; total?: number }>,
       progressMap(store),
     ]);
-    return (body.results ?? []).map((i) => book(store, i, progress));
+    const books = (body.results ?? []).map((i) => book(store, i, progress));
+    return { total: num(body.total) || books.length, books };
   },
 
-  inProgress: async ([server, libraryId], store) => {
-    if (!server) return [];
-    const [body, progress] = await Promise.all([
-      api(store, '/api/me/items-in-progress') as Promise<{ libraryItems?: (Item & { libraryId?: string })[] }>,
+  // GET /api/libraries/:id/personalized (LibraryItem.getPersonalizedShelves): the home page's
+  // shelves, each `{ id, label, type: book | series | authors | …, entities }`. Podcast and
+  // ebook shelves have no place in an audiobook player, so only those three kinds are kept.
+  home: async ([server, libraryId], store) => {
+    if (!server || !libraryId) return { shelves: [] };
+    const [shelves, progress] = await Promise.all([
+      api(store, `/api/libraries/${encodeURIComponent(libraryId)}/personalized?limit=12`) as Promise<{ id: string; label?: string; type: string; entities?: unknown[] }[]>,
       progressMap(store),
     ]);
-    return (body.libraryItems ?? []).filter((i) => !libraryId || i.libraryId === libraryId).map((i) => book(store, i, progress));
+    return {
+      shelves: (Array.isArray(shelves) ? shelves : [])
+        .filter((sh) => (sh.type === 'book' || sh.type === 'series' || sh.type === 'authors') && sh.entities?.length && !sh.id.includes('reading'))
+        .map((sh) => ({
+          id: sh.id, label: str(sh.label) || sh.id, kind: sh.type,
+          books: sh.type === 'book' ? (sh.entities as Item[]).map((i) => book(store, i, progress)) : [],
+          series: sh.type === 'series' ? (sh.entities as SeriesBody[]).map((x) => seriesCard(store, x)) : [],
+          authors: sh.type === 'authors' ? (sh.entities as AuthorBody[]).map((a) => authorCard(store, a)) : [],
+        })),
+    };
+  },
+
+  // GET /api/libraries/:id/authors: `{ authors: [Author + numBooks] }` without paging.
+  authors: async ([server, libraryId], store) => {
+    if (!server || !libraryId) return [];
+    const body = (await api(store, `/api/libraries/${encodeURIComponent(libraryId)}/authors?sort=name`)) as { authors?: AuthorBody[]; results?: AuthorBody[] };
+    return (body.authors ?? body.results ?? []).map((a) => authorCard(store, a)).sort((a, b) => a.name.localeCompare(b.name));
+  },
+
+  // GET /api/authors/:id?include=items,series (AuthorController.findOne): the author, their
+  // books, and those books grouped into series in order.
+  author: async ([server, id], store) => {
+    const empty = { id: '', name: '', image: '', description: '', books: [], series: [] };
+    if (!server || !id) return empty;
+    const [a, progress] = await Promise.all([
+      api(store, `/api/authors/${encodeURIComponent(id)}?include=items,series`) as Promise<AuthorBody & { libraryItems?: Item[]; series?: { id: string; name: string; items?: Item[] }[] }>,
+      progressMap(store),
+    ]);
+    return {
+      id: a.id, name: str(a.name), image: authorImage(store, a), description: str(a.description),
+      books: (a.libraryItems ?? []).map((i) => book(store, i, progress)),
+      series: (a.series ?? []).map((x) => seriesCard(store, { id: x.id, name: x.name, books: x.items })),
+    };
+  },
+
+  // GET /api/libraries/:id/series: `{ results: [series + books], total }`.
+  seriesList: async ([server, libraryId], store) => {
+    if (!server || !libraryId) return [];
+    const body = (await api(store, `/api/libraries/${encodeURIComponent(libraryId)}/series?sort=name&limit=0`)) as { results?: SeriesBody[] };
+    return (body.results ?? []).map((x) => seriesCard(store, x));
+  },
+
+  // A series in order: its name (GET /api/libraries/:id/series/:seriesId), and its books, the
+  // library's items filtered to the series and sorted by sequence, as ABS's series page asks.
+  series: async ([server, libraryId, id], store) => {
+    if (!server || !libraryId || !id) return { id: '', name: '', entries: [] };
+    const filter = `series.${encodeURIComponent(base64(id))}`;
+    const [s, body, progress] = await Promise.all([
+      api(store, `/api/libraries/${encodeURIComponent(libraryId)}/series/${encodeURIComponent(id)}`) as Promise<{ id: string; name?: string }>,
+      api(store, `/api/libraries/${encodeURIComponent(libraryId)}/items?filter=${filter}&sort=sequence&minified=1`) as Promise<{ results?: Item[] }>,
+      progressMap(store),
+    ]);
+    return {
+      id: s.id, name: str(s.name),
+      entries: (body.results ?? []).map((i, at) => ({ sequence: sequenceOf(i) || String(at + 1), book: book(store, i, progress) })),
+    };
+  },
+
+  // GET /api/libraries/:id/collections and GET /api/collections/:id: `{ id, name, description, books }`.
+  collections: async ([server, libraryId], store) => {
+    if (!server || !libraryId) return [];
+    const body = (await api(store, `/api/libraries/${encodeURIComponent(libraryId)}/collections`)) as { results?: CollectionBody[] };
+    return (body.results ?? []).map((c) => ({ id: c.id, name: str(c.name), count: (c.books ?? []).length, covers: (c.books ?? []).slice(0, 3).map((b) => coverUrl(store, b.id)) }));
+  },
+  collection: async ([server, id], store) => {
+    if (!server || !id) return { id: '', name: '', description: '', books: [] };
+    const [c, progress] = await Promise.all([api(store, `/api/collections/${encodeURIComponent(id)}`) as Promise<CollectionBody>, progressMap(store)]);
+    return { id: c.id, name: str(c.name), description: str(c.description), books: (c.books ?? []).map((i) => book(store, i, progress)) };
   },
 
   // GET /api/libraries/:id/search (LibraryController.search → libraryItemsBookFilters.search):

@@ -12,6 +12,8 @@ it says otherwise.
 | `app/app.contract` | The view, its state and actions: sign-in, sidebar sections, cover grids, search, item detail, player, mini player |
 | `app/app.ts` | Every Audiobookshelf API call, and the sign-in kept in the Keychain |
 | `app/app.test.contract` | The tests, run against the mock server on every host |
+| `app/library.contract` | Browsing pieces: cover grid, list, shelves, series, author and collection cards |
+| `app/layouts.test.contract` | Shelves, sort, filter, grid/list, paging, series, authors, collections |
 | `app/offline.ts` | Offline listening: downloads into app storage, and progress queued for the server |
 | `app/downloads.test.contract` | Download, cancel, remove, play with no network, sync when back |
 | `app/miniplayer.test.contract` | The Mini Player window (macOS only) |
@@ -105,6 +107,12 @@ The tests cover:
   the library chosen in the sidebar, and a result opens its detail.
 - **Mini player:** it shows while you browse other sections, plays, pauses and skips, and opens the
   player.
+- **Layouts** (both hosts): Listen Now's shelves of books, series and authors. A library sorted by
+  title, author, recently added and progress; filtered by in progress, finished, not started and
+  downloaded, with an empty filter's way back. Grid and list views, and the 60-book Archive library
+  loading 24 at a time as the agent scrolls (`tap … wheel`). The Dune Chronicles series in
+  order, Frank Herbert's author page (photo, bio, series, books), Tolkien's with no photo, and the
+  Sci-Fi Favorites collection.
 - **Downloads** (both hosts): download Dune track by track (0%, 50%, Downloaded). The grid
   badge shows it, and the Downloads row lists it. With the server cut off (`fail fetch`), it
   opens and plays from `app:/data` files at the saved position, and its progress waits in the
@@ -192,6 +200,10 @@ colours and fonts.
 - **Large titles.** The Mac toolbar has none ("there is no large title" in Exact's bar), so each
   page draws its title in `-exact-large-title` at the top of its content, as Books does under its
   toolbar. The toolbar shows the same title, small.
+- **Shelves scroll sideways in a `scroll`**, not an `NSCollectionView` with paging arrows.
+- **Lists are rows in a scroll, not a virtualized `list`** (an `NSTableView` on the Mac). A
+  virtualized list holds one `for` and nothing else, and the page's large title and paging marker
+  sit beside it. A very large library renders every row it has loaded.
 - **Cover grid.** A CSS grid (`repeat(auto-fill, minmax(9.5rem, 1fr))`) in a `scroll`, not an
   `NSCollectionView`. Exact has no grid virtualization, so a very large library renders every card.
 - **Selection in the grid.** A cover is a link that opens the book. There is no
@@ -224,7 +236,22 @@ colours and fonts.
   remembered with `persist`.
   `GET /api/libraries/:id/items` lists its books, merged with `GET /api/me`'s `mediaProgress` for
   each book's progress. Covers are `/api/items/:id/cover`.
-- **Continue Listening:** `GET /api/me/items-in-progress`, filtered to the current library.
+- **Listen Now:** `GET /api/libraries/:id/personalized` (`LibraryItem.getPersonalizedShelves`) gives
+  shelves, each `{id, label, type, entities}`. The book, series and author shelves (Continue
+  Listening, Recently Added, Recent Series, Discover, Newest Authors…) become horizontal shelves.
+- **A library's page:** Books, Series, Authors and Collections are the toolbar's centred segments.
+  - **Books:** a cover grid or a list (the toolbar's toggle), with Sort (title, author, recently
+    added, progress) and Filter (in progress, finished, not started, downloaded) menus in the
+    toolbar, all remembered. They become `GET /api/libraries/:id/items?sort=…&desc=…&filter=progress.<base64>&limit=…`
+    (`libraryItemsBookFilters`' sort keys and `libraryFilters.decode`'s base64 values).
+    Downloaded is answered from app storage. Books come 24 at a time: the next page loads when the
+    end of the grid scrolls into view (`intersect=`), or from Show More.
+  - **Series:** `GET /api/libraries/:id/series`. A series page is the library's items with
+    `filter=series.<base64 id>&sort=sequence`, each under "Book N".
+  - **Authors:** `GET /api/libraries/:id/authors`. An author page is
+    `GET /api/authors/:id?include=items,series`, with the photo (`/api/authors/:id/image`, no
+    auth; initials when ABS has none), bio, series and books.
+  - **Collections:** `GET /api/libraries/:id/collections`, and a collection's page.
 - **Search:** `GET /api/libraries/:id/search?q=…&limit=24` for the chosen library, asked as you
   type. ABS answers `{book: [{libraryItem}], authors, series, narrators, tags, genres}`
   (`LibraryController.search` → `libraryItemsBookFilters.search`), with each `libraryItem`
@@ -270,6 +297,9 @@ colours and fonts.
 | Library cover grid with title, author, cover, progress | Done |
 | Search the chosen library | Done (toolbar search field on the Search page) |
 | Mini player while browsing | Done (Liquid Glass) |
+| Listen Now shelves from ABS's personalized shelves | Done |
+| Series, Authors and Collections pages, with detail pages | Done |
+| Grid/list toggle, sort, filter, paging | Done (24 at a time, loaded as you scroll) |
 | Mini Player window | Done on macOS (a native module's `NSPanel`) |
 | Offline downloads: progress, cancel, delete, Downloads row, offline playback, queued sync | Done (progress per track, while the app runs) |
 | Continue Listening | Done (`/api/me/items-in-progress`) |

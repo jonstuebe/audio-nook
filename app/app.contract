@@ -3,6 +3,9 @@
 // library that pushes an item's detail, which pushes the player. The audio element lives beside
 // the screens, so a book keeps playing while you browse.
 use EmptyState from "exact:content"
+use Book, BookPage, DownloadInfo, SeriesCard, AuthorCard, CollectionCard, Shelf, Home, AuthorPage, SeriesEntry, SeriesPage, CollectionPage, Choice from "./library.contract"
+use clockText, lengthText, progressText, percentText, booksText, dlState, dlProgress, dlError from "./library.contract"
+use LargeTitle, BookGrid, BookList, SeriesBooks, SeriesGrid, AuthorGrid, CollectionGrid, ShelfRow, AuthorPhoto from "./library.contract"
 
 // Three sidebar sections: Listen Now, Search, and the library a library row chose. A book's
 // detail and the player push onto whichever is showing.
@@ -10,6 +13,9 @@ routes nav
   tab home "/"
     item "/item/:id"
     player "/player"
+    author "/author/:id"
+    series "/series/:id"
+    collection "/collection/:id"
   tab search "/search"
   tab downloads "/downloads"
   tab library "/library"
@@ -28,14 +34,6 @@ shape Library
   id: string
   name: string
 
-shape Book
-  id: string
-  title: string
-  author: string
-  cover: string
-  duration: number
-  progress: number
-
 shape Chapter
   id: number
   title: string
@@ -50,20 +48,6 @@ shape SearchResults
   query: string
   books: Book[]
   authors: Author[]
-
-// A book kept in app storage (offline.ts): downloading a track at a time, done, or failed.
-shape DownloadInfo
-  id: string
-  title: string
-  author: string
-  cover: string
-  duration: number
-  state: string
-  error: string
-  tracksDone: number
-  tracksTotal: number
-  progress: number
-  listened: number
 
 shape DownloadStep
   ok: bool
@@ -102,12 +86,6 @@ shape PlaySession
   chapters: Chapter[]
   tracks: Track[]
 
-fn two(n: number): string = n < 10 ? `0${n}` : `${n}`
-// 75 → "1:15", 3725 → "1:02:05"
-fn clockText(secs: number): string = floor(secs / 3600) > 0 ? `${floor(secs / 3600)}:${two(floor(secs / 60) - floor(secs / 3600) * 60)}:${two(floor(secs) - floor(secs / 60) * 60)}` : `${floor(secs / 60)}:${two(floor(secs) - floor(secs / 60) * 60)}`
-// 7380 → "2h 3m", 120 → "2m"
-fn lengthText(secs: number): string = floor(secs / 3600) > 0 ? `${floor(secs / 3600)}h ${floor(secs / 60) - floor(secs / 3600) * 60}m` : `${max(1, round(secs / 60))}m`
-fn progressText(p: number): string = p >= 1 ? "Finished" : p > 0 ? `${round(p * 100)}% listened` : "Not started"
 fn trackAt(tracks: Track[], at: number): number = max(0, tracks.filter(t => t.startOffset <= at).length - 1)
 fn offsetOf(tracks: Track[], i: number): number = match tracks.at(i) { case some(t) => t.startOffset, case none => 0 }
 fn urlOf(urls: string[], i: number): string = match urls.at(i) { case some(u) => u, case none => "" }
@@ -117,10 +95,6 @@ fn chapterStart(chapters: Chapter[], i: number): number = match chapters.at(i) {
 fn rateText(r: number): string = `${r}×`
 // Which panel shows a tab's stack: a library's own for the library tab.
 fn holds(panel: string, tab: string, library: string): bool = tab == "library" ? panel == `library-${library}` : panel == tab
-fn dlState(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.state).join("")
-fn dlProgress(downloads: DownloadInfo[], id: string): number = sum(downloads.filter(d => d.id == id).map(d => d.progress))
-fn dlError(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.error).join("")
-fn percentText(p: number): string = `${round(p * 100)}%`
 fn nameOf(libraries: Library[], id: string): string = libraries.filter(l => l.id == id).map(l => l.name).join("")
 
 component App
@@ -130,6 +104,13 @@ component App
   state password = ""
   state libraryId = "" persist
   state query = ""
+  // A library's page: books, series, authors or collections; books as a grid or a list, in an
+  // order, filtered; and how many pages of books have been asked for.
+  state libraryView = "books" persist
+  state layout = "grid" persist
+  state sortKey = "title" persist
+  state filterKey = "all" persist
+  state pages = 1
   // The player: which track plays, where in it, and where to go once it has loaded.
   state paused = true
   state track = 0
@@ -153,25 +134,39 @@ component App
   derive api = session.signedIn ? session.server : ""
   resource libraries = libraries(api) as shape Library[] else empty()
   derive currentLibrary = libraries.filter(l => l.id == libraryId).length > 0 ? libraryId : match first(libraries) { case some(l) => l.id, case none => "" }
-  resource books = libraryItems(api, currentLibrary) as shape Book[] else empty()
-  resource continuing = inProgress(api, currentLibrary) as shape Book[] else empty()
+  resource page = libraryItems(api, currentLibrary, sortKey, filterKey, pages * 24) as shape BookPage else empty()
+  derive books = page.books
+  resource home = home(api, currentLibrary) as shape Home else empty()
+  // Each of a library's other views is asked for only while it shows.
+  resource seriesCards = seriesList(api, libraryView == "series" ? currentLibrary : "") as shape SeriesCard[] else empty()
+  resource authorCards = authors(api, libraryView == "authors" ? currentLibrary : "") as shape AuthorCard[] else empty()
+  resource collectionCards = collections(api, libraryView == "collections" ? currentLibrary : "") as shape CollectionCard[] else empty()
+  derive selectedAuthor = match stack(nav).filter(e => e.name == "author").at(-1) { case some(e) => e.params.id, case none => "" }
+  derive selectedSeries = match stack(nav).filter(e => e.name == "series").at(-1) { case some(e) => e.params.id, case none => "" }
+  derive selectedCollection = match stack(nav).filter(e => e.name == "collection").at(-1) { case some(e) => e.params.id, case none => "" }
+  resource authorPage = author(api, selectedAuthor) as shape AuthorPage else empty()
+  resource seriesPage = series(api, currentLibrary, selectedSeries) as shape SeriesPage else empty()
+  resource collectionPage = collection(api, selectedCollection) as shape CollectionPage else empty()
+  derive sortChoices = [Choice(key="title", label="Title"), Choice(key="author", label="Author"), Choice(key="added", label="Recently Added"), Choice(key="progress", label="Progress")]
+  derive filterChoices = [Choice(key="all", label="All Books"), Choice(key="in-progress", label="In Progress"), Choice(key="finished", label="Finished"), Choice(key="not-started", label="Not Started"), Choice(key="downloaded", label="Downloaded")]
+  derive filterLabel = filterChoices.filter(c => c.key == filterKey).map(c => c.label).join("")
   derive selected = match stack(nav).filter(e => e.name == "item").at(-1) { case some(e) => e.params.id, case none => "" }
   resource detail = itemDetail(api, selected) as shape Detail else empty()
   derive panels = ["home", "search", "downloads"].concat(libraries.map(l => `library-${l.id}`))
   resource results = search(api, currentLibrary, query) as shape SearchResults else empty()
 
-  mutation loggedIn as shape Reply refreshes session, libraries, books, continuing, detail
+  mutation loggedIn as shape Reply refreshes session, libraries, page, home, detail
   mutation loggedOut as shape Reply refreshes session
   mutation started as shape PlaySession then afterStart
   mutation synced as shape Reply queue refreshes pending
-  mutation closed as shape Reply queue refreshes continuing, books, detail, pending, downloads
+  mutation closed as shape Reply queue refreshes home, page, detail, pending, downloads
   // Downloads: what is kept, one track fetched per step, and progress waiting for the server.
   resource downloads = downloads(api) as shape DownloadInfo[] else empty()
   resource pending = pendingSync(api) as shape Pending else empty()
   mutation dlStarted as shape Reply refreshes downloads
   mutation dlStepped as shape DownloadStep refreshes downloads
   mutation dlRemoved as shape Reply refreshes downloads
-  mutation flushed as shape Pending refreshes pending, continuing, books
+  mutation flushed as shape Pending refreshes pending, home, page
   derive activeDownload = match first(downloads.filter(d => d.state == "downloading")) { case some(d) => d.id, case none => "" }
   derive keptBooks = downloads.map(d => Book(id=d.id, title=d.title, author=d.author, cover=d.cover, duration=d.duration, progress=d.listened))
   mutation renewed as shape Reply then afterRenew
@@ -190,8 +185,8 @@ component App
   derive position = offsetOf(tracks, track) + at
   // A refresh the server refused (app.ts forgot the sign-in): any read that met it shows the form.
   derive librariesCode = match failure(libraries) { case some(f) => f.code, case none => "" }
-  derive booksCode = match failure(books) { case some(f) => f.code, case none => "" }
-  derive continuingCode = match failure(continuing) { case some(f) => f.code, case none => "" }
+  derive booksCode = match failure(page) { case some(f) => f.code, case none => "" }
+  derive continuingCode = match failure(home) { case some(f) => f.code, case none => "" }
   derive detailCode = match failure(detail) { case some(f) => f.code, case none => "" }
   derive renewSignedOut = match renewed { case some(rr) => rr.error == "signed-out", case none => false }
   derive sessionEnded = session.ended or (session.signedIn and not pending(loggedIn) and (librariesCode == "signed-out" or booksCode == "signed-out" or continuingCode == "signed-out" or detailCode == "signed-out" or renewSignedOut))
@@ -228,11 +223,26 @@ component App
   // A library's row in the sidebar: that library, at its root.
   action showLibrary(id: string)
     libraryId = id
+    pages = 1
     nav = select(nav, "library")
   action showTab(name: string)
     nav = select(nav, name)
   action searchFor(v: string)
     query = v
+  action showView(v: string)
+    libraryView = v
+  action setSort(k: string)
+    sortKey = k
+    pages = 1
+  action setFilter(k: string)
+    filterKey = k
+    pages = 1
+  action toggleLayout
+    layout = layout == "grid" ? "list" : "grid"
+  // The next page of books, when the end of what is shown comes into view (or More is pressed).
+  action loadMore
+    if books.length < page.total and not pending(page)
+      pages = pages + 1
   action back
     nav = back(nav)
   action follow(url: string)
@@ -407,18 +417,22 @@ component App
                       button press=signOut aria-label="Sign Out" testId="sign-out"
                         image "symbol:sign-out"
                     scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      column gap=28 padding="28px 32px 120px"
+                      column gap=32 padding="28px 32px 120px"
                         LargeTitle(title="Listen Now", subtitle=session.username == "" ? session.server : `${session.username} · ${session.server}`)
-                        if failed(continuing)
+                        if failed(home)
                           EmptyState(symbol="symbol:alert", title="Can’t Reach the Server", message=`Couldn’t load your books from ${session.server}.`)
-                        else if continuing.length == 0 and not pending(continuing)
-                          EmptyState(symbol="symbol:icon.headphones", title="Nothing in Progress", message="Books you start listening to appear here.")
+                            button press=showTab("downloads") testId="home-offline-downloads"
+                              text "Go to Downloads"
+                        else if home.shelves.length == 0 and pending(home)
+                          column align-items="center" padding="48px 0" testId="home-loading"
+                            progress aria-label="Loading"
+                        else if home.shelves.length == 0
+                          EmptyState(symbol="symbol:icon.headphones", title="Nothing Here Yet", message="Books in this library appear here once it has some.")
                             button press=showLibrary(currentLibrary) testId="empty-browse"
                               text "Browse the Library"
                         else
-                          column gap=14
-                            text "Continue Listening" font="-exact-title2" font-weight=700
-                            BookGrid(books=continuing, prefix="continue", downloads=downloads)
+                          for sh in home.shelves key=sh.id
+                            ShelfRow(shelf=sh, downloads=downloads)
                 if e.name == "search"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -448,19 +462,154 @@ component App
                               BookGrid(books=results.books, prefix="result", downloads=downloads)
                 if e.name == "library"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    // The toolbar: the library's title, its four views as segments, and for books the
+                    // layout, Sort and Filter (each a menu).
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
                       text nameOf(libraries, currentLibrary) role="heading" aria-level=1 flex=1
+                      row role="tablist" aria-label="View"
+                        button role="tab" aria-selected=(libraryView == "books") press=showView("books") testId="view-books"
+                          text "Books"
+                        button role="tab" aria-selected=(libraryView == "series") press=showView("series") testId="view-series"
+                          text "Series"
+                        button role="tab" aria-selected=(libraryView == "authors") press=showView("authors") testId="view-authors"
+                          text "Authors"
+                        button role="tab" aria-selected=(libraryView == "collections") press=showView("collections") testId="view-collections"
+                          text "Collections"
+                      if libraryView == "books"
+                        button press=toggleLayout aria-label=(layout == "grid" ? "Show as List" : "Show as Grid") testId="layout-button"
+                          image (layout == "grid" ? "symbol:list" : "symbol:icon.grid")
+                        button popovertarget="sort-menu" aria-label="Sort" testId="sort-button"
+                          image "symbol:sort"
+                        button popovertarget="filter-menu" aria-label="Filter" testId="filter-button"
+                          image (filterKey == "all" ? "symbol:filter" : "symbol:icon.filter-on")
                     scroll id=`scroll-${e.id}` flex=1 min-height=0
                       column gap=28 padding="28px 32px 120px"
-                        LargeTitle(title=nameOf(libraries, currentLibrary), subtitle=(pending(books) ? "" : `${books.length} ${books.length == 1 ? "book" : "books"}`))
-                        if failed(books)
-                          EmptyState(symbol="symbol:alert", title="Can’t Load the Library", message=`Couldn’t reach ${session.server}.`)
-                            button press=signOut testId="failed-sign-out"
-                              text "Sign Out"
-                        else if books.length == 0 and not pending(books) and not pending(libraries)
-                          EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
+                        if libraryView == "series"
+                          LargeTitle(title="Series", subtitle=nameOf(libraries, currentLibrary))
+                          if failed(seriesCards)
+                            EmptyState(symbol="symbol:alert", title="Can’t Load Series", message="The server didn’t answer.")
+                          else if seriesCards.length == 0 and pending(seriesCards)
+                            column align-items="center" padding="48px 0"
+                              progress aria-label="Loading"
+                          else if seriesCards.length == 0
+                            EmptyState(symbol="symbol:layers", title="No Series", message="Books that belong to a series are grouped here.")
+                          else
+                            SeriesGrid(series=seriesCards, prefix="series")
+                        else if libraryView == "authors"
+                          LargeTitle(title="Authors", subtitle=nameOf(libraries, currentLibrary))
+                          if failed(authorCards)
+                            EmptyState(symbol="symbol:alert", title="Can’t Load Authors", message="The server didn’t answer.")
+                          else if authorCards.length == 0 and pending(authorCards)
+                            column align-items="center" padding="48px 0"
+                              progress aria-label="Loading"
+                          else if authorCards.length == 0
+                            EmptyState(symbol="symbol:people", title="No Authors", message="This library has no authors yet.")
+                          else
+                            AuthorGrid(authors=authorCards, prefix="author")
+                        else if libraryView == "collections"
+                          LargeTitle(title="Collections", subtitle=nameOf(libraries, currentLibrary))
+                          if failed(collectionCards)
+                            EmptyState(symbol="symbol:alert", title="Can’t Load Collections", message="The server didn’t answer.")
+                          else if collectionCards.length == 0 and pending(collectionCards)
+                            column align-items="center" padding="48px 0"
+                              progress aria-label="Loading"
+                          else if collectionCards.length == 0
+                            EmptyState(symbol="symbol:bookmark", title="No Collections", message="Collections made on the server appear here.")
+                          else
+                            CollectionGrid(collections=collectionCards)
                         else
-                          BookGrid(books=books, prefix="book", downloads=downloads)
+                          LargeTitle(title=nameOf(libraries, currentLibrary), subtitle=(pending(page) and books.length == 0 ? "" : filterKey == "all" ? booksText(page.total) : `${booksText(page.total)} · ${filterLabel}`))
+                          if failed(page)
+                            EmptyState(symbol="symbol:alert", title="Can’t Load the Library", message=`Couldn’t reach ${session.server}.`)
+                              button press=signOut testId="failed-sign-out"
+                                text "Sign Out"
+                          else if books.length == 0 and pending(page)
+                            column align-items="center" padding="48px 0" testId="library-loading"
+                              progress aria-label="Loading"
+                          else if books.length == 0 and filterKey != "all"
+                            EmptyState(symbol="symbol:filter", title=`No ${filterLabel} Books`, message="Try another filter.")
+                              button press=setFilter("all") testId="filter-clear"
+                                text "Show All Books"
+                          else if books.length == 0 and not pending(libraries)
+                            EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
+                          else
+                            if layout == "list"
+                              BookList(books=books, prefix="book", downloads=downloads)
+                            else
+                              BookGrid(books=books, prefix="book", downloads=downloads)
+                            // More as the end comes into view; the button for a reader who would rather press.
+                            if books.length < page.total
+                              view intersect=loadMore height=1 testId="more-marker"
+                              row justify-content="center"
+                                button press=loadMore disabled=pending(page) testId="load-more"
+                                  text (pending(page) ? "Loading…" : `Show More (${page.total - books.length} more)`)
+                    column id="sort-menu" popover="auto" role="menu" aria-label="Sort"
+                      for c in sortChoices key=c.key
+                        button press=setSort(c.key) popovertarget="sort-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(sortKey == c.key) testId=`sort-${c.key}`
+                          text c.label
+                    column id="filter-menu" popover="auto" role="menu" aria-label="Filter"
+                      for c in filterChoices key=c.key
+                        button press=setFilter(c.key) popovertarget="filter-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(filterKey == c.key) testId=`filter-${c.key}`
+                          text c.label
+                if e.name == "author"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" padding="8px 16px"
+                      button id="back" press=back aria-label="Back"
+                        image "symbol:back"
+                      text (authorPage.id == e.params.id ? authorPage.name : "") role="heading" aria-level=2
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      if failed(authorPage)
+                        EmptyState(symbol="symbol:alert", title="Can’t Load This Author", message="The server didn’t answer.")
+                      else if authorPage.id != e.params.id
+                        column align-items="center" padding="48px 0"
+                          progress aria-label="Loading"
+                      else
+                        column gap=28 padding="32px 32px 120px" max-width="64rem"
+                          row gap=28 align-items="center" flex-wrap="wrap"
+                            AuthorPhoto(name=authorPage.name, image=authorPage.image, size=160)
+                            column gap=6 flex=1 flex-basis="18rem" min-width=0
+                              text authorPage.name font="-exact-large-title" font-weight=700 testId="author-title"
+                              text booksText(authorPage.books.length) color="-exact-secondary-label" testId="author-count"
+                              text (authorPage.description == "" ? "" : authorPage.description) line-height=1.45 testId="author-bio"
+                          if authorPage.series.length > 0
+                            column gap=14
+                              text "Series" font="-exact-title2" font-weight=700
+                              SeriesGrid(series=authorPage.series, prefix="authorseries")
+                          column gap=14
+                            text "Books" font="-exact-title2" font-weight=700
+                            BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads)
+                if e.name == "series"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" padding="8px 16px"
+                      button id="back" press=back aria-label="Back"
+                        image "symbol:back"
+                      text (seriesPage.id == e.params.id ? seriesPage.name : "") role="heading" aria-level=2
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      if failed(seriesPage)
+                        EmptyState(symbol="symbol:alert", title="Can’t Load This Series", message="The server didn’t answer.")
+                      else if seriesPage.id != e.params.id
+                        column align-items="center" padding="48px 0"
+                          progress aria-label="Loading"
+                      else
+                        column gap=28 padding="28px 32px 120px"
+                          LargeTitle(title=seriesPage.name, subtitle=booksText(seriesPage.entries.length))
+                          SeriesBooks(entries=seriesPage.entries, downloads=downloads)
+                if e.name == "collection"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" padding="8px 16px"
+                      button id="back" press=back aria-label="Back"
+                        image "symbol:back"
+                      text (collectionPage.id == e.params.id ? collectionPage.name : "") role="heading" aria-level=2
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      if failed(collectionPage)
+                        EmptyState(symbol="symbol:alert", title="Can’t Load This Collection", message="The server didn’t answer.")
+                      else if collectionPage.id != e.params.id
+                        column align-items="center" padding="48px 0"
+                          progress aria-label="Loading"
+                      else
+                        column gap=28 padding="28px 32px 120px"
+                          LargeTitle(title=collectionPage.name, subtitle=(collectionPage.description == "" ? booksText(collectionPage.books.length) : `${booksText(collectionPage.books.length)} · ${collectionPage.description}`))
+                          BookGrid(books=collectionPage.books, prefix="collectionbook", downloads=downloads)
                 if e.name == "downloads"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -633,54 +782,6 @@ component SignIn
           section
             button press=signIn disabled=(busy or server.trim() == "" or username.trim() == "") testId="sign-in-button"
               text "Sign In"
-
-// A page's large title, as Books and Music set it in the page under the toolbar.
-component LargeTitle
-  props
-    title: string
-    subtitle: string
-  view
-    column gap=2
-      text title font="-exact-large-title" font-weight=700 testId="page-title"
-      text subtitle color="-exact-secondary-label"
-
-// Covers in a grid that fills the width, as Books' library does.
-component BookGrid
-  props
-    books: Book[]
-    prefix: string
-    downloads: DownloadInfo[]
-  view
-    column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
-      for b in books key=b.id
-        BookCard(book=b, prefix=prefix, dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id))
-
-component BookCard
-  props
-    book: Book
-    prefix: string
-    dlState: string
-    dlProgress: number
-  view
-    link href=path("item", book.id) aria-label=`${book.title}, ${book.author}` testId=`${prefix}-${book.id}`
-      column gap=4 min-width=0
-        image book.cover alt="" width="100%" aspect-ratio=1 border-radius=8 object-fit="cover"
-          background-color="-exact-secondary-fill" box-shadow="0 4px 12px rgba(0, 0, 0, 0.18)"
-        text book.title font-weight=600 padding-top=6 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-title-${book.id}`
-        text book.author font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
-        row gap=6 align-items="center"
-          if book.progress > 0 and book.progress < 1
-            progress value=book.progress max=1 width="3rem"
-          text progressText(book.progress) font="-exact-caption1" color="-exact-secondary-label" testId=`${prefix}-progress-${book.id}`
-        // Kept for offline listening, or on its way.
-        if dlState == "done"
-          row gap=4 align-items="center" testId=`${prefix}-kept-${book.id}`
-            image "symbol:download" font-size=11 color="-exact-secondary-label"
-            text "Downloaded" font="-exact-caption1" color="-exact-secondary-label"
-        else if dlState == "downloading"
-          row gap=6 align-items="center" testId=`${prefix}-downloading-${book.id}`
-            progress value=dlProgress max=1 width="3rem"
-            text `Downloading ${percentText(dlProgress)}` font="-exact-caption1" color="-exact-secondary-label"
 
 component ItemDetail
   props

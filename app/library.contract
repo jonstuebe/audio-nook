@@ -1,0 +1,296 @@
+// Audio Nook's browsing pieces: books as a cover grid or a list, Listen Now's shelves, and the
+// series, author and collection cards and pages. app.contract places them; app.ts answers them.
+use EmptyState from "exact:content"
+
+shape Book
+  id: string
+  title: string
+  author: string
+  cover: string
+  duration: number
+  progress: number
+
+// One page of a library: as many books as have been asked for, of `total`.
+shape BookPage
+  total: number
+  books: Book[]
+
+// A book kept in app storage (offline.ts): downloading a track at a time, done, or failed.
+shape DownloadInfo
+  id: string
+  title: string
+  author: string
+  cover: string
+  duration: number
+  state: string
+  error: string
+  tracksDone: number
+  tracksTotal: number
+  progress: number
+  listened: number
+
+shape SeriesCard
+  id: string
+  name: string
+  count: number
+  covers: string[]
+
+shape AuthorCard
+  id: string
+  name: string
+  image: string
+  count: number
+
+shape CollectionCard
+  id: string
+  name: string
+  count: number
+  covers: string[]
+
+// Listen Now: ABS's personalized shelves of books, series or authors.
+shape Shelf
+  id: string
+  label: string
+  kind: string
+  books: Book[]
+  series: SeriesCard[]
+  authors: AuthorCard[]
+
+shape Home
+  shelves: Shelf[]
+
+shape AuthorPage
+  id: string
+  name: string
+  image: string
+  description: string
+  books: Book[]
+  series: SeriesCard[]
+
+shape SeriesEntry
+  sequence: string
+  book: Book
+
+shape SeriesPage
+  id: string
+  name: string
+  entries: SeriesEntry[]
+
+shape CollectionPage
+  id: string
+  name: string
+  description: string
+  books: Book[]
+
+shape Choice
+  key: string
+  label: string
+
+fn two(n: number): string = n < 10 ? `0${n}` : `${n}`
+// 75 → "1:15", 3725 → "1:02:05"
+fn clockText(secs: number): string = floor(secs / 3600) > 0 ? `${floor(secs / 3600)}:${two(floor(secs / 60) - floor(secs / 3600) * 60)}:${two(floor(secs) - floor(secs / 60) * 60)}` : `${floor(secs / 60)}:${two(floor(secs) - floor(secs / 60) * 60)}`
+// 7380 → "2h 3m", 120 → "2m"
+fn lengthText(secs: number): string = floor(secs / 3600) > 0 ? `${floor(secs / 3600)}h ${floor(secs / 60) - floor(secs / 3600) * 60}m` : `${max(1, round(secs / 60))}m`
+fn progressText(p: number): string = p >= 1 ? "Finished" : p > 0 ? `${round(p * 100)}% listened` : "Not started"
+fn percentText(p: number): string = `${round(p * 100)}%`
+fn booksText(n: number): string = `${n} ${n == 1 ? "book" : "books"}`
+fn dlState(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.state).join("")
+fn dlProgress(downloads: DownloadInfo[], id: string): number = sum(downloads.filter(d => d.id == id).map(d => d.progress))
+fn dlError(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.error).join("")
+// "Frank Herbert" → "FH": an author without a photo.
+fn initials(name: string): string = name.split(" ").filter(w => w != "").map(w => w.slice(0, 1)).slice(0, 2).join("").toUpperCase()
+// Each shelf's books carry a test id prefix of their own; Continue Listening's is "continue".
+fn shelfPrefix(id: string): string = id == "continue-listening" ? "continue" : id == "recently-added" ? "recent" : id == "listen-again" ? "again" : id == "continue-series" ? "next" : id
+
+// A page's large title, as Books and Music set it in the page under the toolbar.
+component LargeTitle
+  props
+    title: string
+    subtitle: string
+  view
+    column gap=2
+      text title font="-exact-large-title" font-weight=700 testId="page-title"
+      text subtitle color="-exact-secondary-label" testId="page-subtitle"
+
+// Covers in a grid that fills the width, as Books' library does.
+component BookGrid
+  props
+    books: Book[]
+    prefix: string
+    downloads: DownloadInfo[]
+  view
+    column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
+      for b in books key=b.id
+        BookCard(book=b, prefix=prefix, caption="", dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id))
+
+component BookCard
+  props
+    book: Book
+    prefix: string
+    caption: string
+    dlState: string
+    dlProgress: number
+  view
+    link href=path("item", book.id) aria-label=`${book.title}, ${book.author}` testId=`${prefix}-${book.id}`
+      column gap=4 min-width=0
+        if caption != ""
+          text caption font="-exact-caption1" font-weight=600 color="-exact-secondary-label" testId=`${prefix}-caption-${book.id}`
+        image book.cover alt="" width="100%" aspect-ratio=1 border-radius=8 object-fit="cover"
+          background-color="-exact-secondary-fill" box-shadow="0 4px 12px rgba(0, 0, 0, 0.18)"
+        text book.title font-weight=600 padding-top=6 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-title-${book.id}`
+        text book.author font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+        row gap=6 align-items="center"
+          if book.progress > 0 and book.progress < 1
+            progress value=book.progress max=1 width="3rem"
+          text progressText(book.progress) font="-exact-caption1" color="-exact-secondary-label" testId=`${prefix}-progress-${book.id}`
+        // Kept for offline listening, or on its way.
+        if dlState == "done"
+          row gap=4 align-items="center" testId=`${prefix}-kept-${book.id}`
+            image "symbol:download" font-size=11 color="-exact-secondary-label"
+            text "Downloaded" font="-exact-caption1" color="-exact-secondary-label"
+        else if dlState == "downloading"
+          row gap=6 align-items="center" testId=`${prefix}-downloading-${book.id}`
+            progress value=dlProgress max=1 width="3rem"
+            text `Downloading ${percentText(dlProgress)}` font="-exact-caption1" color="-exact-secondary-label"
+
+// The same books as rows, as Books' list view draws them: cover, title and author, length, progress.
+component BookList
+  props
+    books: Book[]
+    prefix: string
+    downloads: DownloadInfo[]
+  view
+    column testId=`${prefix}-list`
+      for b in books key=b.id
+        column
+          link href=path("item", b.id) aria-label=`${b.title}, ${b.author}` testId=`${prefix}-${b.id}`
+            row gap=14 align-items="center" padding="8px 4px"
+              image b.cover alt="" width=44 height=44 border-radius=5 object-fit="cover" background-color="-exact-secondary-fill"
+              column flex=1 min-width=0 gap=1
+                text b.title font-weight=600 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-title-${b.id}`
+                text b.author font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+              if dlState(downloads, b.id) == "done"
+                image "symbol:download" color="-exact-secondary-label" aria-label="Downloaded" testId=`${prefix}-kept-${b.id}`
+              text lengthText(b.duration) color="-exact-secondary-label" font-variant-numeric="tabular-nums" width="4rem" text-align="end"
+              text progressText(b.progress) color="-exact-secondary-label" width="7.5rem" text-align="end" testId=`${prefix}-progress-${b.id}`
+          hr
+
+// A series' books in order, each under its place in the series.
+component SeriesBooks
+  props
+    entries: SeriesEntry[]
+    downloads: DownloadInfo[]
+  view
+    column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
+      for e in entries key=e.book.id
+        BookCard(book=e.book, prefix="series", caption=`Book ${e.sequence}`, dlState=dlState(downloads, e.book.id), dlProgress=dlProgress(downloads, e.book.id))
+
+// Up to three covers fanned behind one another, as Books shows a series or a collection.
+component CoverStack
+  props
+    covers: string[]
+  view
+    column position="relative" width="100%" aspect-ratio=1
+      for c, i in sortBy(covers.slice(0, 3), (x, n) => n, "desc") key=c
+        image c alt="" position="absolute" width="82%" aspect-ratio=1 border-radius=8 object-fit="cover"
+          top=`${(min(covers.length, 3) - 1 - i) * 7}%` left=`${(min(covers.length, 3) - 1 - i) * 9}%`
+          background-color="-exact-secondary-fill" box-shadow="0 4px 12px rgba(0, 0, 0, 0.2)"
+      if covers.length == 0
+        column width="100%" aspect-ratio=1 border-radius=8 background-color="-exact-secondary-fill" align-items="center" justify-content="center"
+          image "symbol:book" font-size=28 color="-exact-tertiary-label"
+
+component SeriesTile
+  props
+    series: SeriesCard
+    prefix: string
+  view
+    link href=path("series", series.id) aria-label=`${series.name}, ${booksText(series.count)}` testId=`${prefix}-${series.id}`
+      column gap=4 min-width=0
+        CoverStack(covers=series.covers)
+        text series.name font-weight=600 padding-top=6 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-name-${series.id}`
+        text booksText(series.count) font="-exact-subheadline" color="-exact-secondary-label"
+
+component AuthorTile
+  props
+    author: AuthorCard
+    prefix: string
+  view
+    link href=path("author", author.id) aria-label=`${author.name}, ${booksText(author.count)}` testId=`${prefix}-${author.id}`
+      column gap=6 align-items="center" min-width=0
+        AuthorPhoto(name=author.name, image=author.image, size=120)
+        text author.name font-weight=600 text-align="center" white-space="nowrap" text-overflow="ellipsis" overflow="hidden" max-width="100%" testId=`${prefix}-name-${author.id}`
+        text booksText(author.count) font="-exact-subheadline" color="-exact-secondary-label"
+
+// An author's photo in a circle, or their initials where ABS has none.
+component AuthorPhoto
+  props
+    name: string
+    image: string
+    size: number
+  view
+    column width=size height=size border-radius=999 overflow="hidden" background-color="-exact-secondary-fill"
+      align-items="center" justify-content="center" flex-shrink=0
+      if image != ""
+        image image alt=name width=size height=size object-fit="cover"
+      else
+        text initials(name) font-size=(size * 0.36) font-weight=600 color="-exact-secondary-label"
+
+component CollectionTile
+  props
+    collection: CollectionCard
+  view
+    link href=path("collection", collection.id) aria-label=`${collection.name}, ${booksText(collection.count)}` testId=`collection-${collection.id}`
+      column gap=4 min-width=0
+        CoverStack(covers=collection.covers)
+        text collection.name font-weight=600 padding-top=6 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`collection-name-${collection.id}`
+        text booksText(collection.count) font="-exact-subheadline" color="-exact-secondary-label"
+
+component SeriesGrid
+  props
+    series: SeriesCard[]
+    prefix: string
+  view
+    column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
+      for s in series key=s.id
+        SeriesTile(series=s, prefix=prefix)
+
+component AuthorGrid
+  props
+    authors: AuthorCard[]
+    prefix: string
+  view
+    column display="grid" grid-template-columns="repeat(auto-fill, minmax(8.5rem, 1fr))" column-gap=24 row-gap=28
+      for a in authors key=a.id
+        AuthorTile(author=a, prefix=prefix)
+
+component CollectionGrid
+  props
+    collections: CollectionCard[]
+  view
+    column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
+      for c in collections key=c.id
+        CollectionTile(collection=c)
+
+// One of Listen Now's shelves: its title, and its books, series or authors in a row that
+// scrolls sideways, as Books' and Music's home shelves do.
+component ShelfRow
+  props
+    shelf: Shelf
+    downloads: DownloadInfo[]
+  view
+    column gap=12 testId=`shelf-${shelf.id}`
+      text shelf.label font="-exact-title2" font-weight=700 testId=`shelf-title-${shelf.id}`
+      scroll overflow-x="auto" overflow-y="hidden" margin="0 -32px" testId=`shelf-scroll-${shelf.id}`
+        row gap=20 padding="2px 32px 14px" align-items="flex-start"
+          if shelf.kind == "book"
+            for b in shelf.books key=b.id
+              column width="9.5rem" flex-shrink=0
+                BookCard(book=b, prefix=shelfPrefix(shelf.id), caption="", dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id))
+          else if shelf.kind == "series"
+            for s in shelf.series key=s.id
+              column width="9.5rem" flex-shrink=0
+                SeriesTile(series=s, prefix="shelfseries")
+          else
+            for a in shelf.authors key=a.id
+              column width="8.5rem" flex-shrink=0
+                AuthorTile(author=a, prefix="shelfauthor")

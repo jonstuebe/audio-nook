@@ -25,6 +25,12 @@ const scenes = {
   'mini-player-window': [
     'tap continue-li_dune', ...settle, ...play, 'tap player-mini-window', 'clock +2500 real', 'panel mini-player-window',
   ],
+  layouts: [
+    ...settle, 'clock +1000 real', 'shot home-shelves',
+    'tap tab-library-lib_books', ...settle, 'tap view-authors', ...settle, 'tap author-au_herbert', ...settle, 'clock +800 real', 'shot author',
+    'back', 'clock settle', 'tap view-series', ...settle, 'tap series-se_dune', ...settle, 'shot series',
+    'back', 'clock settle', 'tap view-books', ...settle, 'tap layout-button', ...settle, 'shot list-view', 'tap layout-button', 'clock settle',
+  ],
   downloads: [
     'tap tab-library-lib_books', ...settle, 'tap book-li_martian', ...settle, 'tap download', 'clock data', ...pump(2), 'back', 'clock settle',
     'tap book-li_dune', ...settle, 'tap download', 'clock data', ...pump(1), 'clock settle', 'shot download-detail',

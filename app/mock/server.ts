@@ -7,7 +7,7 @@
 // (ACCESS_TTL_MS, default 1 h) and accepted as a Bearer or `?token=`; POST /auth/refresh with
 // `x-refresh-token` rotates both; /logout ends the refresh token's session. The `legacy` account
 // is a pre-2.26 server's: one `user.token` that never expires and no refresh token.
-import { BOOKS, LIBRARIES, USER, LEGACY_USER, LEGACY_TOKEN, PASSWORD, coverPng } from './fixtures.ts';
+import { AUTHORS, BOOKS, COLLECTIONS, LIBRARIES, USER, LEGACY_USER, LEGACY_TOKEN, PASSWORD, coverPng } from './fixtures.ts';
 
 const PORT = Number(process.env.PORT ?? 13378);
 
@@ -23,8 +23,21 @@ function toneWav(seconds: number, hz: number): Uint8Array {
   for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.round(Math.sin((2 * Math.PI * hz * i) / rate) * 2000), true);
   return new Uint8Array(buf);
 }
-const audio = new Map<string, Uint8Array>();
-for (const b of BOOKS) b.tracks.forEach((t, i) => audio.set(`${b.id}/${i}`, toneWav(t.duration, 220 + i * 110)));
+// Made on first request: sixty-odd books of tone would be slow to make up front.
+const made = new Map<string, Uint8Array>();
+const audio = {
+  get(key: string): Uint8Array | undefined {
+    const hit = made.get(key);
+    if (hit) return hit;
+    const [id, i] = key.split('/');
+    const t = BOOKS.find((b) => b.id === id)?.tracks[Number(i)];
+    if (!t) return undefined;
+    const bytes = toneWav(t.duration, 220 + Number(i) * 110);
+    made.set(key, bytes);
+    return bytes;
+  },
+};
+const wavSize = (seconds: number) => 44 + Math.round(seconds * 8000) * 2;
 
 type Session = { id: string; itemId: string; currentTime: number; syncs: number; closed: boolean };
 const sessions = new Map<string, Session>();
@@ -63,7 +76,7 @@ function minified(b: (typeof BOOKS)[number]) {
   return {
     id: b.id, libraryId: b.libraryId, mediaType: 'book', addedAt: b.addedAt,
     media: {
-      metadata: { title: b.title, authorName: b.author, narratorName: b.narrator },
+      metadata: { title: b.title, authorName: b.author, narratorName: b.narrator, seriesName: b.series ? `${b.series.name} #${b.series.sequence}` : '' },
       duration: b.tracks.reduce((s, t) => s + t.duration, 0), numTracks: b.tracks.length,
       numChapters: b.chapters.length, coverPath: `/metadata/items/${b.id}/cover.jpg`,
     },
@@ -75,7 +88,8 @@ function expanded(b: (typeof BOOKS)[number]) {
     ...m,
     media: {
       ...m.media,
-      metadata: { title: b.title, authors: [{ id: 'au1', name: b.author }], narrators: [b.narrator], description: b.description },
+      metadata: { title: b.title, authors: [{ id: b.authorId, name: b.author }], narrators: [b.narrator], description: b.description,
+        series: b.series ? [{ id: b.series.id, name: b.series.name, sequence: b.series.sequence }] : [] },
       chapters: b.chapters,
       tracks: tracksOf(b),
     },
@@ -85,12 +99,35 @@ function tracksOf(b: (typeof BOOKS)[number]) {
   let offset = 0;
   return b.tracks.map((t, i) => {
     // AudioTrack.toJSON: its file's metadata names the size (FileMetadata).
-    const size = audio.get(`${b.id}/${i}`)?.length ?? 0;
+    const size = wavSize(t.duration);
     const track = { index: i + 1, startOffset: offset, duration: t.duration, title: t.title, contentUrl: `/api/items/${b.id}/file/${i}`, mimeType: 'audio/wav',
       metadata: { filename: `track-${i + 1}.wav`, ext: '.wav', size } };
     offset += t.duration;
     return track;
   });
+}
+// libraryItemsBookFilters' progress values: what the listener has done with a book.
+function progressState(id: string): string {
+  const p = progress.get(id);
+  return !p || p.currentTime <= 0 ? 'not-started' : p.progress >= 1 ? 'finished' : 'in-progress';
+}
+function authorJson(a: (typeof AUTHORS)[number], libraryId: string) {
+  const numBooks = BOOKS.filter((b) => b.authorId === a.id && (!libraryId || b.libraryId === libraryId)).length;
+  return { id: a.id, asin: null, name: a.name, description: a.description || null, imagePath: a.image ? `/metadata/authors/${a.id}.jpg` : null,
+    libraryId: libraryId || 'lib_books', addedAt: 1_690_000_000_000, updatedAt: 1_690_000_000_000, numBooks };
+}
+function seriesOf(libraryId: string) {
+  const map = new Map<string, { id: string; name: string; description: null; addedAt: number; books: ReturnType<typeof minified>[] }>();
+  for (const b of BOOKS.filter((b) => b.libraryId === libraryId && b.series).sort((x, y) => Number(x.series!.sequence) - Number(y.series!.sequence))) {
+    const entry = map.get(b.series!.id) ?? { id: b.series!.id, name: b.series!.name, description: null, addedAt: b.addedAt, books: [] };
+    entry.books.push(minified(b));
+    entry.addedAt = Math.max(entry.addedAt, b.addedAt);
+    map.set(b.series!.id, entry);
+  }
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+function collectionJson(c: (typeof COLLECTIONS)[number]) {
+  return { id: c.id, libraryId: c.libraryId, name: c.name, description: c.description, books: c.bookIds.map((id) => expanded(BOOKS.find((b) => b.id === id)!)), lastUpdate: 0, createdAt: 0 };
 }
 function progressOf(id: string) {
   const p = progress.get(id);
@@ -183,6 +220,12 @@ async function route(req: Request): Promise<Response> {
       const ok = all.some((s) => s.syncs >= min && (!closed || s.closed));
       return json({ sessions: all }, ok ? 200 : 404);
     }
+    // Author photos need no auth either (`ignorePatterns`); an author without one is a 404.
+    const photo = path.match(/^\/api\/authors\/([^/]+)\/image$/);
+    if (photo) {
+      const a = AUTHORS.find((x) => x.id === photo[1]);
+      return a?.image ? new Response(coverPng({ id: `author:${a.id}`, color: a.image }), { headers: { 'content-type': 'image/png' } }) : new Response('Not Found', { status: 404 });
+    }
     // Covers need no auth in ABS (Auth.js `ignorePatterns`).
     let cover = path.match(/^\/api\/items\/([^/]+)\/cover$/);
     if (cover) {
@@ -210,10 +253,87 @@ async function route(req: Request): Promise<Response> {
     }
     if (path === '/api/me') return json({ ...USER, mediaProgress: BOOKS.map((b) => progressOf(b.id)).filter(Boolean) });
     if (path === '/api/libraries') return json({ libraries: LIBRARIES });
+    // LibraryController.getLibraryItems: sort, desc, filter (group.<base64 value>), limit and page.
     let m = path.match(/^\/api\/libraries\/([^/]+)\/items$/);
     if (m) {
-      const results = BOOKS.filter((b) => b.libraryId === m![1]).map(minified);
+      let all = BOOKS.filter((b) => b.libraryId === m![1]);
+      const filter = url.searchParams.get('filter') ?? '';
+      const [group, encoded] = [filter.split('.')[0], filter.split('.').slice(1).join('.')];
+      const value = encoded ? decodeURIComponent(atob(decodeURIComponent(encoded))) : '';
+      if (group === 'progress') all = all.filter((b) => progressState(b.id) === value);
+      if (group === 'series') all = all.filter((b) => b.series?.id === value);
+      const sort = url.searchParams.get('sort') ?? 'media.metadata.title', desc = url.searchParams.get('desc') === '1';
+      const key = (b: (typeof BOOKS)[number]): string | number =>
+        sort === 'addedAt' ? b.addedAt : sort === 'media.metadata.authorName' ? b.author.toLowerCase() : sort === 'progress' ? (progress.get(b.id)?.lastUpdate ?? 0)
+        : sort === 'sequence' ? Number(b.series?.sequence ?? 0) : b.title.toLowerCase();
+      all = [...all].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a.title.localeCompare(b.title)) * (desc ? -1 : 1));
+      const limit = Number(url.searchParams.get('limit') ?? 0), page = Number(url.searchParams.get('page') ?? 0);
+      const results = (limit ? all.slice(page * limit, page * limit + limit) : all).map(minified);
+      return json({ results, total: all.length, limit, page, sortBy: sort, sortDesc: desc, filterBy: filter });
+    }
+    // LibraryController.getUserPersonalizedShelves → LibraryItem.getPersonalizedShelves: non-empty shelves only.
+    if ((m = path.match(/^\/api\/libraries\/([^/]+)\/personalized$/))) {
+      const inLib = BOOKS.filter((b) => b.libraryId === m![1]);
+      const limit = Number(url.searchParams.get('limit') ?? 10);
+      const started = inLib.filter((b) => progressState(b.id) === 'in-progress').sort((a, b) => progress.get(b.id)!.lastUpdate - progress.get(a.id)!.lastUpdate);
+      const recent = [...inLib].sort((a, b) => b.addedAt - a.addedAt).slice(0, limit);
+      const discover = inLib.filter((b) => progressState(b.id) === 'not-started').sort((a, b) => a.title.localeCompare(b.title)).slice(0, limit);
+      const series = seriesOf(m[1]).slice(0, limit);
+      const authors = AUTHORS.filter((a) => inLib.some((b) => b.authorId === a.id)).slice(0, limit).map((a) => authorJson(a, m![1]));
+      const shelves = [
+        { id: 'continue-listening', label: 'Continue Listening', labelStringKey: 'LabelContinueListening', type: 'book', entities: started.map(minified), total: started.length },
+        { id: 'recently-added', label: 'Recently Added', labelStringKey: 'LabelRecentlyAdded', type: 'book', entities: recent.map(minified), total: inLib.length },
+        { id: 'recent-series', label: 'Recent Series', labelStringKey: 'LabelRecentSeries', type: 'series', entities: series, total: series.length },
+        { id: 'discover', label: 'Discover', labelStringKey: 'LabelDiscover', type: 'book', entities: discover.map(minified), total: discover.length },
+        { id: 'newest-authors', label: 'Newest Authors', labelStringKey: 'LabelNewestAuthors', type: 'authors', entities: authors, total: authors.length },
+      ];
+      return json(shelves.filter((s) => s.entities.length));
+    }
+    // LibraryController.getAuthors (unpaged): { authors: [Author.toOldJSONExpanded(numBooks)] }.
+    if ((m = path.match(/^\/api\/libraries\/([^/]+)\/authors$/))) {
+      const lib = m[1];
+      return json({ authors: AUTHORS.filter((a) => BOOKS.some((b) => b.libraryId === lib && b.authorId === a.id)).map((a) => authorJson(a, lib)) });
+    }
+    // LibraryController.getAllSeriesForLibrary: { results: [series + books (minified)], total }.
+    if ((m = path.match(/^\/api\/libraries\/([^/]+)\/series$/))) {
+      const results = seriesOf(m[1]);
       return json({ results, total: results.length, limit: 0, page: 0 });
+    }
+    if ((m = path.match(/^\/api\/libraries\/([^/]+)\/series\/([^/]+)$/))) {
+      const found = seriesOf(m[1]).find((x) => x.id === m![2]);
+      return found ? json({ id: found.id, name: found.name, description: null, addedAt: found.addedAt }) : new Response('Not Found', { status: 404 });
+    }
+    // LibraryController.getCollectionsForLibrary: { results: [collection + books (expanded)], total }.
+    if ((m = path.match(/^\/api\/libraries\/([^/]+)\/collections$/))) {
+      const results = COLLECTIONS.filter((c) => c.libraryId === m![1]).map(collectionJson);
+      return json({ results, total: results.length, limit: 0, page: 0 });
+    }
+    if ((m = path.match(/^\/api\/collections\/([^/]+)$/))) {
+      const c = COLLECTIONS.find((x) => x.id === m![1]);
+      return c ? json(collectionJson(c)) : new Response('Not Found', { status: 404 });
+    }
+    // AuthorController.findOne with include=items,series.
+    if ((m = path.match(/^\/api\/authors\/([^/]+)$/))) {
+      const a = AUTHORS.find((x) => x.id === m![1]);
+      if (!a) return new Response('Not Found', { status: 404 });
+      const books = BOOKS.filter((b) => b.authorId === a.id);
+      const json1: Record<string, unknown> = { ...authorJson(a, '') };
+      const include = (url.searchParams.get('include') ?? '').split(',');
+      if (include.includes('items')) {
+        json1.libraryItems = books.map(minified);
+        if (include.includes('series')) {
+          const map = new Map<string, { id: string; name: string; items: unknown[] }>();
+          for (const b of books.filter((b) => b.series).sort((x, y) => Number(x.series!.sequence) - Number(y.series!.sequence))) {
+            const entry = map.get(b.series!.id) ?? { id: b.series!.id, name: b.series!.name, items: [] };
+            const item = minified(b);
+            (item.media.metadata as Record<string, unknown>).series = { id: b.series!.id, name: b.series!.name, sequence: b.series!.sequence };
+            entry.items.push(item);
+            map.set(b.series!.id, entry);
+          }
+          json1.series = [...map.values()];
+        }
+      }
+      return json(json1);
     }
     if ((m = path.match(/^\/api\/libraries\/([^/]+)\/search$/))) {
       const q = (url.searchParams.get('q') ?? '').trim().toLowerCase();

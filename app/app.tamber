@@ -6,3 +6,5 @@ icons
   icon.headphones = icon(sf "headphones", svg "icons/headphones.svg")
   icon.books-vertical = icon(sf "books.vertical", svg "icons/books-vertical.svg")
   icon.mini-player = icon(sf "pip.enter", svg "icons/mini-player.svg")
+  icon.grid = icon(sf "square.grid.2x2", svg "icons/grid.svg")
+  icon.filter-on = icon(sf "line.3.horizontal.decrease.circle.fill", svg "icons/filter-on.svg")
