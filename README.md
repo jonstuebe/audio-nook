@@ -31,6 +31,59 @@ it says otherwise.
 | `app/app.tamber`, `app/assets/icons/` | Icon tokens (SF Symbols on Apple, an SVG elsewhere): headphones, books, previous/next chapter |
 | `docs/screenshots/` | macOS screens in light and dark: `library`, `search`, `detail`, `player`, `mini-player` and `sidebar-collapsed`, each with `-light.png` and `-dark.png` |
 
+## Install on a Mac
+
+Audio Nook runs on Macs with Apple silicon and macOS 26 or later. The build is arm64 only: Exact
+builds its Apple host for the machine it builds on, and the CI runner is Apple silicon.
+
+1. Download `AudioNook-<version>-macos.dmg` from the repository's
+   [Releases](https://github.com/jonstuebe/audio-nook/releases). A build of `main` is also on
+   each run of the **Release** workflow under Actions, as an artifact.
+2. Open the DMG and drag **Audio Nook** onto **Applications**.
+3. Open it. Releases are signed ad-hoc, not with a Developer ID, so the first time macOS says it
+   can't check the app for malicious software. Allow it once, by either route:
+   - **System Settings ▸ Privacy & Security:** scroll to *"Audio Nook" was blocked to protect
+     your Mac*, click **Open Anyway**, then confirm with **Open Anyway** and your password.
+     (On macOS 15 and later, Control-click ▸ Open no longer offers this; Settings is the way.)
+   - **Terminal:** `xattr -dr com.apple.quarantine "/Applications/Audio Nook.app"`, then open it
+     as usual.
+
+   After that it opens like any other app. A build signed with a Developer ID and notarized (see
+   Releasing) needs neither step.
+4. Sign in with your Audiobookshelf server's address, username and password. Plain `http`
+   addresses on your network or a tailnet work: the app allows them (App Transport Security is
+   off for its own connections).
+
+## Releasing
+
+The **Release** workflow (`.github/workflows/release.yml`) builds the DMG on GitHub's `xcode-27`
+macOS runner. It checks out Exact at the commit in its `EXACT_SHA` and runs `exact setup`, caching
+the toolchain on that commit, so a later run only rebuilds the app. It then runs
+`bun exact.mjs mac --release`, signs, verifies (`codesign --verify --deep --strict`, and logs
+`spctl`'s assessment), and packages `AudioNook-<version>-macos.dmg` with an Applications link.
+
+- **A release:** tag the commit and push the tag. The workflow attaches the DMG and its SHA-256 to
+  a GitHub Release whose notes carry the install steps above.
+
+  ```sh
+  git tag v1.0.0
+  git push origin v1.0.0
+  ```
+
+  The tag's version (`1.0.0`) becomes the DMG's name and the app's `CFBundleShortVersionString`.
+- **A build without a release:** run the workflow from Actions (**Run workflow**), or push to
+  `main`. Either uploads the DMG as an artifact, named `AudioNook-0.1.0-<short sha>-macos.dmg`.
+- **Signing:** ad-hoc by default. With the repository secrets `MACOS_CERT_P12` (a base64 Developer
+  ID Application `.p12`), `MACOS_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID` and
+  `APPLE_APP_PASSWORD` (an app-specific password), the workflow signs with the Developer ID and
+  the hardened runtime instead, notarizes the DMG with `notarytool`, and staples it.
+- **Exact's version:** the workflow's `EXACT_SHA` is the commit the app builds against. Bump it
+  together with the local checkout (`git -C ../exact checkout <sha>`), and the caches follow.
+- **What ships:** the production build (`mac --release`: production update trust, no development
+  menu or hooks). `deploy.store.macos` is `"0"`, so the app is a plain binary with no update
+  channel. The mock server and its address stay out of the app: `commands.server` and
+  `MOCK_SERVER` are read only by the test runner.
+
 ## Set up Exact
 
 Exact has no packaged CLI: an app refers to a source checkout by path. This app expects it at
