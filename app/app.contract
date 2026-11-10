@@ -5,6 +5,9 @@
 use EmptyState from "exact:content"
 use Book, BookPage, DownloadInfo, SeriesCard, AuthorCard, CollectionCard, Shelf, Home, AuthorPage, SeriesEntry, SeriesPage, CollectionPage, Choice from "./library.contract"
 use clockText, lengthText, progressText, percentText, booksText, dlState, dlProgress, dlError from "./library.contract"
+use Chapter, Detail from "./detail.contract"
+use ItemDetail, AuthorHeader, GroupHeader, NumberedBooks from "./detail.contract"
+use dlBytes from "./library.contract"
 use LargeTitle, BookGrid, BookList, SeriesBooks, SeriesGrid, AuthorGrid, CollectionGrid, ShelfRow, AuthorPhoto from "./library.contract"
 
 // Three sidebar sections: Listen Now, Search, and the library a library row chose. A book's
@@ -34,12 +37,6 @@ shape Library
   id: string
   name: string
 
-shape Chapter
-  id: number
-  title: string
-  start: number
-  end: number
-
 shape Author
   id: string
   name: string
@@ -60,18 +57,6 @@ shape Pending
 shape SeriesRef
   id: string
   name: string
-
-shape Detail
-  id: string
-  title: string
-  author: string
-  narrator: string
-  description: string
-  cover: string
-  duration: number
-  progress: number
-  currentTime: number
-  chapters: Chapter[]
 
 shape Track
   index: number
@@ -99,6 +84,8 @@ fn chapterStart(chapters: Chapter[], i: number): number = match chapters.at(i) {
 fn rateText(r: number): string = `${r}×`
 // Which panel shows a tab's stack: a library's own for the library tab.
 fn holds(panel: string, tab: string, library: string): bool = tab == "library" ? panel == `library-${library}` : panel == tab
+// A series' or collection's facts: how many books, how long, how many finished.
+fn groupFacts(books: Book[]): string = `${booksText(books.length)} · ${lengthText(sum(books.map(b => b.duration)))}${books.filter(b => b.progress >= 1).length > 0 ? ` · ${books.filter(b => b.progress >= 1).length} finished` : ""}`
 fn nameOf(libraries: Library[], id: string): string = libraries.filter(l => l.id == id).map(l => l.name).join("")
 
 component App
@@ -115,6 +102,8 @@ component App
   state sortKey = "title" persist
   state filterKey = "all" persist
   state pages = 1
+  // A chapter row's start, for the session about to begin (-1: where the listener left off).
+  state startAt = -1
   // The book a right-click opened the menu on.
   state aimed: option<Book> = none
   // The player: which track plays, where in it, and where to go once it has loaded.
@@ -241,6 +230,19 @@ component App
     nav = select(nav, name)
   action searchFor(v: string)
     query = v
+  // A chapter row: that book from that chapter, whether it is playing or not.
+  action playAt(id: string, at: number)
+    if nowItem == id
+      seek(at)
+      paused = false
+    else
+      startAt = at
+      play(id)
+  action setFinished(id: string, finished: bool)
+    send finishedSet = markFinished(id, not finished)
+  // Copy Link: the book's page in the server's own web app.
+  action copyItemLink(id: string)
+    copyText(`${session.server}/item/${id}`)
   action openBookMenu(b: Book)
     aimed = some(b)
   action menuPlay
@@ -301,13 +303,15 @@ component App
   action afterStart
     match started
       case some(s)
-        let t = trackAt(s.tracks, s.currentTime)
-        let local = s.currentTime - offsetOf(s.tracks, t)
+        let from = startAt >= 0 ? startAt : s.currentTime
+        let t = trackAt(s.tracks, from)
+        let local = from - offsetOf(s.tracks, t)
         track = t
         at = local
         pendingSeek = local
         seeking = true
-        lastSynced = s.currentTime
+        lastSynced = from
+        startAt = -1
         paused = false
         nav = top(nav).name == "player" ? nav : push(nav, "/player")
       case none
@@ -604,20 +608,16 @@ component App
                         column align-items="center" padding="48px 0"
                           progress aria-label="Loading"
                       else
-                        column gap=28 padding="32px 32px 120px" max-width="64rem"
-                          row gap=28 align-items="center" flex-wrap="wrap"
-                            AuthorPhoto(name=authorPage.name, image=authorPage.image, size=160)
-                            column gap=6 flex=1 flex-basis="18rem" min-width=0
-                              text authorPage.name font="-exact-large-title" font-weight=700 testId="author-title"
-                              text booksText(authorPage.books.length) color="-exact-secondary-label" testId="author-count"
-                              text (authorPage.description == "" ? "" : authorPage.description) line-height=1.45 testId="author-bio"
-                          if authorPage.series.length > 0
+                        column
+                          AuthorHeader(name=authorPage.name, image=authorPage.image, count=authorPage.books.length, bio=authorPage.description)
+                          column gap=32 padding="8px 32px 120px"
+                            if authorPage.series.length > 0
+                              column gap=14
+                                text "Series" font="-exact-title2" font-weight=700
+                                SeriesGrid(series=authorPage.series, prefix="authorseries")
                             column gap=14
-                              text "Series" font="-exact-title2" font-weight=700
-                              SeriesGrid(series=authorPage.series, prefix="authorseries")
-                          column gap=14
-                            text "Books" font="-exact-title2" font-weight=700
-                            BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                              text "Books" font="-exact-title2" font-weight=700
+                              BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "series"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -631,9 +631,10 @@ component App
                         column align-items="center" padding="48px 0"
                           progress aria-label="Loading"
                       else
-                        column gap=28 padding="28px 32px 120px"
-                          LargeTitle(title=seriesPage.name, subtitle=booksText(seriesPage.entries.length))
-                          SeriesBooks(entries=seriesPage.entries, downloads=downloads, menu=openBookMenu, playNow=play)
+                        column
+                          GroupHeader(kind="Series", name=seriesPage.name, covers=seriesPage.entries.slice(0, 3).map(x => x.book.cover),
+                            facts=groupFacts(seriesPage.entries.map(x => x.book)), note="")
+                          NumberedBooks(entries=seriesPage.entries, prefix="series", numbered=true, menu=openBookMenu)
                 if e.name == "collection"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -647,9 +648,10 @@ component App
                         column align-items="center" padding="48px 0"
                           progress aria-label="Loading"
                       else
-                        column gap=28 padding="28px 32px 120px"
-                          LargeTitle(title=collectionPage.name, subtitle=(collectionPage.description == "" ? booksText(collectionPage.books.length) : `${booksText(collectionPage.books.length)} · ${collectionPage.description}`))
-                          BookGrid(books=collectionPage.books, prefix="collectionbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                        column
+                          GroupHeader(kind="Collection", name=collectionPage.name, covers=collectionPage.books.slice(0, 3).map(b => b.cover),
+                            facts=groupFacts(collectionPage.books), note=collectionPage.description)
+                          NumberedBooks(entries=collectionPage.books.map((b, n) => SeriesEntry(sequence=`${n + 1}`, book=b)), prefix="collectionbook", numbered=false, menu=openBookMenu)
                 if e.name == "downloads"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -672,9 +674,11 @@ component App
                     else
                       scroll id=`scroll-${e.id}` flex=1 min-height=0
                         if detail.id == e.params.id
-                          ItemDetail(item=detail, play=play(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id), seekChapter=seek,
-                            dlState=dlState(downloads, detail.id), dlProgress=dlProgress(downloads, detail.id), dlError=dlError(downloads, detail.id),
-                            download=download(detail.id), removeDownload=removeKept(detail.id), starts=pending(dlStarted))
+                          ItemDetail(item=detail, play=play(detail.id), playFrom=playAt(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id),
+                            currentChapter=chapter, dlState=dlState(downloads, detail.id), dlProgress=dlProgress(downloads, detail.id),
+                            dlError=dlError(downloads, detail.id), dlBytes=dlBytes(downloads, detail.id), download=download(detail.id),
+                            removeDownload=removeKept(detail.id), starts=pending(dlStarted), finish=setFinished(detail.id, detail.progress >= 1),
+                            copyLink=copyItemLink(detail.id), menu=openBookMenu, playNow=play, downloads=downloads)
                 if e.name == "player"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -861,61 +865,3 @@ component SignIn
           section
             button press=signIn disabled=(busy or server.trim() == "" or username.trim() == "") testId="sign-in-button"
               text "Sign In"
-
-component ItemDetail
-  props
-    item: Detail
-    play: action
-    starting: bool
-    isCurrent: bool
-    seekChapter: action
-    dlState: string
-    dlProgress: number
-    dlError: string
-    download: action
-    removeDownload: action
-    starts: bool
-  view
-    column gap=28 padding="32px 32px 120px" max-width="56rem"
-      row gap=32 align-items="flex-end" flex-wrap="wrap"
-        image item.cover alt=item.title width=220 height=220 border-radius=10 object-fit="cover"
-          box-shadow="0 10px 28px rgba(0, 0, 0, 0.22)" testId="detail-cover"
-        column gap=6 flex=1 flex-basis="16rem" min-width=0
-          text item.title font="-exact-large-title" font-weight=700 testId="detail-title"
-          text `By ${item.author}` font="-exact-title3" testId="detail-author"
-          text (item.narrator == "" ? "" : `Narrated by ${item.narrator}`) color="-exact-secondary-label" testId="detail-narrator"
-          text `${lengthText(item.duration)} · ${item.chapters.length} ${item.chapters.length == 1 ? "chapter" : "chapters"} · ${progressText(item.progress)}` color="-exact-secondary-label" testId="detail-meta"
-          row padding-top=12 gap=10 flex-wrap="wrap" align-items="center"
-            button press=play disabled=starting buttonStyle="filled" testId="play"
-              image "symbol:play-fill"
-              text (starting ? "Starting…" : isCurrent ? "Resume" : item.currentTime > 0 ? "Continue" : "Play")
-            if dlState == "done"
-              row gap=6 align-items="center"
-                image "symbol:download" color="-exact-secondary-label"
-                text "Downloaded" color="-exact-secondary-label" testId="download-state"
-              button press=removeDownload destructive=true testId="download-delete"
-                text "Remove Download"
-            else if dlState == "downloading"
-              row gap=8 align-items="center"
-                progress value=dlProgress max=1 width="8rem" testId="download-progress"
-                text `Downloading ${percentText(dlProgress)}` color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="download-state"
-              button press=removeDownload testId="download-cancel"
-                text "Cancel"
-            else
-              button press=download disabled=starts buttonStyle="bordered" testId="download"
-                image "symbol:download"
-                text (starts ? "Preparing…" : dlState == "failed" ? "Try Download Again" : "Download")
-          if dlState == "failed"
-            text dlError color="-exact-system-red" font="-exact-footnote" testId="download-error"
-      column gap=8
-        text "About" font="-exact-title3" font-weight=700
-        text item.description line-height=1.45 testId="detail-description"
-      column gap=0
-        text "Chapters" font="-exact-title3" font-weight=700 padding-bottom=6
-        for c in item.chapters key=c.id
-          column
-            row gap=8 padding="9px 0" testId=`detail-chapter-${c.id}`
-              text `${c.id + 1}` color="-exact-secondary-label" font-variant-numeric="tabular-nums" width="2rem"
-              text c.title flex=1 min-width=0
-              text clockText(c.end - c.start) font-variant-numeric="tabular-nums" color="-exact-secondary-label"
-            hr

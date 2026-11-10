@@ -29,6 +29,7 @@ shape DownloadInfo
   tracksTotal: number
   progress: number
   listened: number
+  bytes: number
 
 shape SeriesCard
   id: string
@@ -97,6 +98,7 @@ fn percentText(p: number): string = `${round(p * 100)}%`
 fn booksText(n: number): string = `${n} ${n == 1 ? "book" : "books"}`
 fn dlState(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.state).join("")
 fn dlProgress(downloads: DownloadInfo[], id: string): number = sum(downloads.filter(d => d.id == id).map(d => d.progress))
+fn dlBytes(downloads: DownloadInfo[], id: string): number = sum(downloads.filter(d => d.id == id).map(d => d.bytes))
 fn dlError(downloads: DownloadInfo[], id: string): string = downloads.filter(d => d.id == id).map(d => d.error).join("")
 // "Frank Herbert" → "FH": an author without a photo.
 fn initials(name: string): string = name.split(" ").filter(w => w != "").map(w => w.slice(0, 1)).slice(0, 2).join("").toUpperCase()

@@ -12,6 +12,9 @@ it says otherwise.
 | `app/app.contract` | The view, its state and actions: sign-in, sidebar sections, cover grids, search, item detail, player, mini player |
 | `app/app.ts` | Every Audiobookshelf API call, and the sign-in kept in the Keychain |
 | `app/app.test.contract` | The tests, run against the mock server on every host |
+| `app/detail.contract` | The detail pages: a book's hero, About, Information, chapters and shelves; author, series and collection headers |
+| `app/text.ts` | ABS's HTML descriptions as plain paragraphs |
+| `app/detail.test.contract` | The book page's links, More, chapters, … menu and size; series, author and collection headers |
 | `app/library.contract` | Browsing pieces: cover grid, list, shelves, series, author and collection cards |
 | `app/polish.test.contract` | Hover and Play on covers, context menus, keyboard shortcuts, placeholders |
 | `app/layouts.test.contract` | Shelves, sort, filter, grid/list, paging, series, authors, collections |
@@ -108,6 +111,13 @@ The tests cover:
   the library chosen in the sidebar, and a result opens its detail.
 - **Mini player:** it shows while you browse other sections, plays, pauses and skips, and opens the
   player.
+- **Detail** (both hosts): Dune's hero ("Book 1 of Dune Chronicles", the author link, "1m left",
+  Continue) and the HTML description, whose More toggles. The Information grid's genres, year,
+  publisher, language, ISBN, ASIN, length and size. The series and author links, the More in Dune
+  Chronicles shelf, and Herbert's bio with More. Dune Messiah's 12 chapters show 8, then all; a
+  chapter's click plays from it and marks it, and another click moves the mark. The … menu marks
+  The Hobbit finished and back, shows its series and author, and copies its link. A downloaded
+  book shows its size on this Mac, and Remove Download in the menu takes it away. A collection's header.
 - **Polish** (both hosts): hovering a cover shows its Play button, which plays it. Placeholders go
   once art loads. The context menu marks Finished and back, downloads, removes, shows the series
   and plays. ⌘1–⌘5 switch sections, ⌘F finds, and Space, ⌘← ⌘→, ⌥⌘← ⌥⌘→ drive playback.
@@ -213,6 +223,14 @@ colours and fonts.
 - **Large titles.** The Mac toolbar has none ("there is no large title" in Exact's bar), so each
   page draws its title in `-exact-large-title` at the top of its content, as Books does under its
   toolbar. The toolbar shows the same title, small.
+- **The ambient backdrop is the cover blurred, not its dominant colour.** Exact has no image colour
+  sampling, so the hero blurs and saturates a scaled copy of the cover (CSS `filter`, which macOS
+  and the web draw; Linux draws it unfiltered), faded out with a `mask-image` gradient.
+- **More appears by length, not by measured lines.** The view can't know whether a clamped text was
+  cut, so More shows when the description is long (over ~320 characters, or more than one
+  paragraph). Collapsed, the paragraphs run together, so the clamp's last line isn't a blank one.
+- **Descriptions are plain text.** Bold and italic in ABS's HTML are dropped; Contract's `text`
+  takes Markdown, but a Markdown text can't be line-clamped.
 - **Hover on covers.** Apple hosts don't draw `:hover` state parts yet (Exact's LLP 1121 stage 8 B),
   so a cover tracks the pointer with its `hover` event. That lifts its shadow and shows a glass Play
   button, at the cost of a state change per hover.
@@ -256,6 +274,32 @@ colours and fonts.
   remembered with `persist`.
   `GET /api/libraries/:id/items` lists its books, merged with `GET /api/me`'s `mediaProgress` for
   each book's progress. Covers are `/api/items/:id/cover`.
+- **A book's page:** `GET /api/items/:id?expanded=1&include=progress` gives
+  `Book.oldMetadataToJSONExpanded`'s metadata: `subtitle`, `authors[]`, `narrators[]`, `series[]`
+  `{id, name, sequence}`, `genres[]`, `publishedYear`, `publisher`, `language`, `isbn`, `asin`, and
+  `description` as HTML. It also gives the item's `size` and the listener's progress.
+  - **Description:** `descriptionPlain` strips the tags and runs the paragraphs together, so
+    `text.ts` turns `description` into paragraphs (block ends, `<br>`, list bullets, entities).
+  - **Hero:** sits over an ambient backdrop, the cover itself blurred and saturated (CSS `filter`),
+    faded into the window with a `mask-image` gradient. It shows "Book N of <Series>" (linking the
+    series), the title and subtitle, the author (linking their page) and narrator, and a slim
+    progress bar with the time left.
+  - **Actions:** Play/Continue is a prominent glass button. Download is a glass button that turns
+    into inline progress and Cancel. The … menu has Mark as Finished, Show in Series, Go to Author,
+    Remove Download and Copy Link (the book's page in the server's web app).
+  - **About:** clamps to four lines with More, up to 42rem wide.
+  - **Information:** genres as tags, then length, chapters, published, publisher, language,
+    narrator, ISBN, ASIN, size, and the size on this Mac when downloaded.
+  - **Chapters:** the first eight, with Show All. A click plays from that chapter, and the chapter
+    playing is marked.
+  - **Shelves:** More in <Series> (the series' other books, by sequence) and More by <Author>
+    (`GET /api/authors/:id?include=items`, less what the series shelf shows).
+  - **Width:** the hero sits beside its text when wide and stacks above it when narrow
+    (`flex-wrap`).
+- **Author, series and collection pages:** an author has a large round photo over a blurred
+  backdrop of itself, with the bio at four lines and More. A series and a collection have a header
+  of fanned covers, with books, length and how many are finished, then numbered rows (a series by
+  its sequence) with cover, length and progress.
 - **Listen Now:** `GET /api/libraries/:id/personalized` (`LibraryItem.getPersonalizedShelves`) gives
   shelves, each `{id, label, type, entities}`. The book, series and author shelves (Continue
   Listening, Recently Added, Recent Series, Discover, Newest Authors…) become horizontal shelves.
@@ -319,6 +363,8 @@ colours and fonts.
 | Mini player while browsing | Done (Liquid Glass) |
 | Listen Now shelves from ABS's personalized shelves | Done |
 | Series, Authors and Collections pages, with detail pages | Done |
+| Book detail like Apple Books: hero over a cover backdrop, links, glass actions and … menu, About with More, Information grid, chapters, series and author shelves | Done (backdrop is the blurred cover) |
+| Author, series and collection detail headers and lists | Done |
 | Hover and pressed covers, context menus, keyboard shortcuts, menu bar playback | Done (hover drawn by the app; playback in View and the Dock menu) |
 | Cover art at its own aspect ratio, placeholders, empty and loading states | Done |
 | Grid/list toggle, sort, filter, paging | Done (24 at a time, loaded as you scroll) |

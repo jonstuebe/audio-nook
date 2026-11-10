@@ -76,7 +76,9 @@ function minified(b: (typeof BOOKS)[number]) {
   return {
     id: b.id, libraryId: b.libraryId, mediaType: 'book', addedAt: b.addedAt,
     media: {
-      metadata: { title: b.title, authorName: b.author, narratorName: b.narrator, seriesName: b.series ? `${b.series.name} #${b.series.sequence}` : '' },
+      // Book.oldMetadataToJSONMinified
+      metadata: { title: b.title, subtitle: b.subtitle ?? null, authorName: b.author, narratorName: b.narrator,
+        seriesName: b.series ? `${b.series.name} #${b.series.sequence}` : '', genres: b.genres ?? [], publishedYear: b.publishedYear ?? null },
       duration: b.tracks.reduce((s, t) => s + t.duration, 0), numTracks: b.tracks.length,
       numChapters: b.chapters.length, coverPath: `/metadata/items/${b.id}/cover.jpg`,
     },
@@ -86,10 +88,19 @@ function expanded(b: (typeof BOOKS)[number]) {
   const m = minified(b);
   return {
     ...m,
+    // LibraryItem's total size on disk, in bytes.
+    size: b.tracks.reduce((sum, t) => sum + wavSize(t.duration), 0),
     media: {
       ...m.media,
-      metadata: { title: b.title, authors: [{ id: b.authorId, name: b.author }], narrators: [b.narrator], description: b.description,
-        series: b.series ? [{ id: b.series.id, name: b.series.name, sequence: b.series.sequence }] : [] },
+      // Book.oldMetadataToJSONExpanded
+      metadata: {
+        title: b.title, subtitle: b.subtitle ?? null, authors: [{ id: b.authorId, name: b.author }], narrators: [b.narrator],
+        series: b.series ? [{ id: b.series.id, name: b.series.name, sequence: b.series.sequence }] : [],
+        genres: b.genres ?? [], publishedYear: b.publishedYear ?? null, publishedDate: null, publisher: b.publisher ?? null,
+        description: b.description, isbn: b.isbn ?? null, asin: b.asin ?? null, language: b.language ?? null, explicit: false, abridged: false,
+        authorName: b.author, narratorName: b.narrator, seriesName: b.series ? `${b.series.name} #${b.series.sequence}` : '',
+        descriptionPlain: b.description.replace(/<[^>]+>/g, ''),
+      },
       chapters: b.chapters,
       tracks: tracksOf(b),
     },
@@ -193,6 +204,8 @@ async function route(req: Request): Promise<Response> {
     if (path === '/__mock/reset' && method === 'POST') {
       progress.clear();
       progress.set('li_dune', { currentTime: 45, progress: 45 / 120, lastUpdate: 1_700_000_000_000 });
+      sessions.clear();
+      nextSession = 1;
       return json({ reset: true });
     }
     if (path === '/__mock/revoke' && method === 'POST') {

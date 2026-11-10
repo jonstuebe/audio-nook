@@ -31,6 +31,16 @@ const scenes = {
     'back', 'clock settle', 'tap view-series', ...settle, 'tap series-se_dune', ...settle, 'shot series',
     'back', 'clock settle', 'tap view-books', ...settle, 'tap layout-button', ...settle, 'shot list-view', 'tap layout-button', 'clock settle',
   ],
+  details: [
+    'tap tab-library-lib_books', ...settle, 'tap book-li_dune', ...settle, 'clock +1500 real', 'shot detail-wide',
+    'tap detail wheel 0 700', 'clock +600 real', 'shot detail-wide-lower',
+    'tap detail-about-more', 'clock settle', 'clock +400 real', 'tap detail wheel 0 -2000', 'clock +400 real', 'shot detail-about-open',
+    'resize 720x900', 'clock settle', 'clock +1200 real', 'shot detail-narrow', 'resize 1180x780', 'clock settle',
+    'back', 'clock settle', 'tap view-authors', ...settle, 'tap author-au_herbert', ...settle, 'clock +1000 real', 'shot author',
+    'back', 'clock settle', 'tap view-series', ...settle, 'tap series-se_dune', ...settle, 'clock +800 real', 'shot series',
+    'back', 'clock settle', 'tap view-collections', ...settle, 'tap collection-co_scifi', ...settle, 'clock +800 real', 'shot collection',
+    'back', 'clock settle', 'tap view-books', 'clock settle',
+  ],
   downloads: [
     'tap tab-library-lib_books', ...settle, 'tap book-li_martian', ...settle, 'tap download', 'clock data', ...pump(2), 'back', 'clock settle',
     'tap book-li_dune', ...settle, 'tap download', 'clock data', ...pump(1), 'clock settle', 'shot download-detail',

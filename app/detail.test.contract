@@ -1,0 +1,212 @@
+// The book page: its hero, About and Information, chapters, shelves and … menu; and the author,
+// series and collection headers. Against the mock server's fixtures (Dune's description is HTML).
+
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
+test "the hero links to the series and author, says the time left, and About reads as paragraphs with More"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_hobbit"
+  clock data
+  clock settle
+  expect text "detail-description" == "In a hole in the ground there lived a hobbit. Bilbo Baggins is swept into a quest to reclaim the lost Dwarf Kingdom of Erebor from the fearsome dragon Smaug."
+  tap "detail-about-more"
+  expect text "detail-description" == "In a hole in the ground there lived a hobbit.\n\nBilbo Baggins is swept into a quest to reclaim the lost Dwarf Kingdom of Erebor from the fearsome dragon Smaug."
+  expect tree missing "detail-progress"
+  expect tree missing "shelf-more-series"
+  expect tree missing "shelf-more-author"
+  back
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  expect text "detail-series" == "Book 1 of Dune Chronicles"
+  expect text "detail-author" == "Frank Herbert"
+  expect text "detail-narrator" == "Narrated by Scott Brick"
+  expect text "detail-progress" == "1m left"
+  expect text "play" == "Continue"
+  expect text "detail-about-more" == "More"
+  tap "detail-about-more"
+  expect text "detail-about-more" == "Less"
+  tap "detail-about-more"
+  expect text "detail-about-more" == "More"
+  expect text "info-genre-0" == "Science Fiction"
+  expect text "info-genre-2" == "Space Opera"
+  expect text "info-year-value" == "1965"
+  expect text "info-publisher-value" == "Macmillan Audio"
+  expect text "info-language-value" == "English"
+  expect text "info-isbn-value" == "9781427201430"
+  expect text "info-asin-value" == "B002V1OF70"
+  expect text "info-length-value" == "2m"
+  expect text "info-size-value" == "1.9 MB"
+  expect tree missing "info-downloaded"
+  expect text "shelf-title-more-series" == "More in Dune Chronicles"
+  expect tree has "more-series-li_messiah"
+  expect tree missing "shelf-more-author"
+  tap "detail-series-link"
+  clock data
+  clock settle
+  expect text "page-title" == "Dune Chronicles"
+  expect text "page-subtitle" == "2 books · 4m"
+  expect text "series-caption-li_dune" == "1"
+  expect text "series-caption-li_messiah" == "2"
+  expect text "series-progress-li_dune" == "38% listened"
+  back
+  clock settle
+  tap "detail-author-link"
+  clock data
+  clock settle
+  expect text "author-title" == "Frank Herbert"
+  expect text "author-bio-more" == "More"
+  tap "author-bio-more"
+  expect text "author-bio-more" == "Less"
+  back
+  clock settle
+  tap "more-series-li_messiah"
+  clock data
+  clock settle
+  expect text "detail-title" == "Dune Messiah"
+  expect text "detail-series" == "Book 2 of Dune Chronicles"
+  expect tree has "more-series-li_dune"
+
+test "chapters show eight then all, play from a click, and mark the one playing"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_messiah"
+  clock data
+  clock settle
+  expect tree has "detail-chapter-7"
+  expect tree missing "detail-chapter-8"
+  expect text "detail-chapters-toggle" == "Show All 12 Chapters"
+  tap "detail-chapters-toggle"
+  expect tree has "detail-chapter-11"
+  expect text "detail-chapters-toggle" == "Show Fewer"
+  tap "detail-chapter-5"
+  clock data
+  clock settle
+  clock +600 real
+  tap "play-pause"
+  clock +300 real
+  expect state nowItem == "li_messiah"
+  expect text "player-chapter" == "Chapter 6"
+  back
+  clock settle
+  expect tree has "detail-chapter-current-5"
+  expect text "play" == "Resume"
+  tap "detail-chapter-2"
+  clock +300 real
+  expect tree has "detail-chapter-current-2"
+  expect tree missing "detail-chapter-current-5"
+
+test "the … menu marks a book finished and not, shows its series and author, and copies its link"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_hobbit"
+  clock data
+  clock settle
+  tap "detail-more"
+  clock settle
+  expect text "detail-menu-finish" == "Mark as Finished"
+  tap "detail-menu-finish"
+  clock data
+  expect text "detail-progress" == "Finished"
+  expect text "play" == "Play Again"
+  tap "detail-more"
+  clock settle
+  expect text "detail-menu-finish" == "Mark as Not Finished"
+  tap "detail-menu-finish"
+  clock data
+  expect tree missing "detail-progress"
+  tap "detail-more"
+  clock settle
+  tap "detail-menu-copy"
+  tap "detail-more"
+  clock settle
+  tap "detail-menu-series"
+  clock data
+  clock settle
+  expect text "page-title" == "Middle-earth"
+  back
+  clock settle
+  tap "detail-more"
+  clock settle
+  tap "detail-menu-author"
+  clock data
+  clock settle
+  expect text "author-title" == "J. R. R. Tolkien"
+
+test "a downloaded book says its size on this Mac, and the … menu removes it"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_martian"
+  clock data
+  clock settle
+  tap "download"
+  clock data
+  clock +300
+  clock data
+  expect text "download-state" == "Downloaded"
+  expect text "info-downloaded-value" == "1.9 MB"
+  tap "detail-more"
+  clock settle
+  tap "download-delete"
+  clock data
+  expect text "download" == "Download"
+  expect tree missing "info-downloaded"
+
+test "a collection's page lists its books under a header of their covers"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "view-collections"
+  clock data
+  tap "collection-co_scifi"
+  clock data
+  clock settle
+  expect text "page-title" == "Sci-Fi Favorites"
+  expect text "page-subtitle" == "3 books · 6m"
+  expect text "page-note" == "Deserts and red planets."
+  expect tree has "collectionbook-li_messiah"

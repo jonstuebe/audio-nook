@@ -19,6 +19,7 @@ test "a wrong password is refused and keeps the form"
   expect text "server" == "http://127.0.0.1:13378"
 
 test "sign in lists the library and continue listening, a relaunch stays signed in, sign out returns to the form"
+  request POST "/__mock/reset" as reader
   clock data
   type "server" "127.0.0.1:13378/"
   type "username" "reader"
@@ -61,6 +62,7 @@ test "sign in lists the library and continue listening, a relaunch stays signed 
   expect text "server" == "http://127.0.0.1:13378"
 
 test "an item's detail shows its author, narrator, description, length and chapters"
+  request POST "/__mock/reset" as reader
   clock data
   type "server" "http://127.0.0.1:13378"
   type "username" "reader"
@@ -75,14 +77,17 @@ test "an item's detail shows its author, narrator, description, length and chapt
   clock data
   clock settle
   expect text "detail-title" == "Dune"
-  expect text "detail-author" == "By Frank Herbert"
+  expect text "detail-author" == "Frank Herbert"
   expect text "detail-narrator" == "Narrated by Scott Brick"
-  expect text "detail-description" == "A desert planet, a noble family, and the spice that everyone wants."
-  expect text "detail-meta" == "2m · 3 chapters · 38% listened"
+  expect text "detail-series" == "Book 1 of Dune Chronicles"
+  expect text "detail-meta" == "Science Fiction · 1965 · 2m"
+  expect text "detail-progress" == "1m left"
+  expect text "info-chapters-value" == "3"
   expect tree has "detail-chapter-2"
   expect text "play" == "Continue"
 
 test "play starts a session at the saved position, pauses, skips, changes chapter and speed, syncs and closes"
+  request POST "/__mock/reset" as reader
   clock data
   type "server" "http://127.0.0.1:13378"
   type "username" "reader"

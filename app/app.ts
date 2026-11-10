@@ -2,6 +2,7 @@
 // The view sees no token except in the audio URLs `trackUrls` builds; covers need none.
 import type { Answer, Result, Sources, Storage, Store } from './app.contract.d.ts';
 import * as offline from './offline.ts';
+import { htmlToText } from './text.ts';
 
 // The mock server the tests run (mock/server.ts, `bun exact.mjs test` starts it here). The app
 // itself talks to whatever server the person signs in to.
@@ -149,6 +150,18 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0
 async function progressMap(store: Store): Promise<Map<string, Progress>> {
   const me = (await api(store, '/api/me')) as { mediaProgress?: Progress[] };
   return new Map((me.mediaProgress ?? []).map((p) => [p.libraryItemId, p]));
+}
+
+// A shelf beside a book: the books an endpoint answers (a series' items, an author's
+// libraryItems), less the book itself; nothing when it fails, as a shelf is extra.
+async function shelfOf(store: Store, path: string, except: string): Promise<Book[]> {
+  try {
+    const [body, progress] = await Promise.all([api(store, path) as Promise<{ results?: Item[]; libraryItems?: Item[] }>, progressMap(store)]);
+    return (body.results ?? body.libraryItems ?? []).filter((x) => x.id !== except).slice(0, 12).map((x) => book(store, x, progress));
+  } catch (e) {
+    if ((e as { reason?: string }).reason === 'signed-out') throw e;
+    return [];
+  }
 }
 
 // The view's sort words, as ABS's `sort` keys (libraryItemsBookFilters.getSortOrder) and direction.
@@ -382,7 +395,7 @@ const sources: Sources = {
       progressMap(store),
     ]);
     return {
-      id: a.id, name: str(a.name), image: authorImage(store, a), description: str(a.description),
+      id: a.id, name: str(a.name), image: authorImage(store, a), description: htmlToText(str(a.description)),
       books: (a.libraryItems ?? []).map((i) => book(store, i, progress)),
       series: (a.series ?? []).map((x) => seriesCard(store, { id: x.id, name: x.name, books: x.items })),
     };
@@ -443,8 +456,16 @@ const sources: Sources = {
     return { query: q, books, authors: (body.authors ?? []).map((x) => ({ id: str(x.id), name: str(x.name) })) };
   },
 
+  // GET /api/items/:id?expanded=1&include=progress: the book (Book.oldMetadataToJSONExpanded's
+  // metadata, its chapters, the item's size) and where the listener is. Then, beside it, the
+  // rest of its series (the library's items with filter=series.<base64 id>, by sequence) and the
+  // author's other books (GET /api/authors/:id?include=items), for the page's shelves.
   itemDetail: async ([server, id], store, storage) => {
-    const empty = { id: '', title: '', author: '', narrator: '', description: '', cover: '', duration: 0, progress: 0, currentTime: 0, chapters: [] };
+    const empty = {
+      id: '', title: '', subtitle: '', author: '', authorId: '', narrator: '', description: '', cover: '', duration: 0, progress: 0,
+      currentTime: 0, chapters: [], seriesId: '', seriesName: '', seriesSequence: '', genres: [], publishedYear: '', publisher: '',
+      language: '', isbn: '', asin: '', size: 0, moreInSeries: [], moreByAuthor: [],
+    };
     if (!server || !id) return empty;
     // A downloaded book opens with no network, from what was kept with it.
     const kept = (await offline.index(storage))[id];
@@ -453,27 +474,48 @@ const sources: Sources = {
       fetched = await api(store, `/api/items/${encodeURIComponent(id)}?expanded=1&include=progress`);
     } catch (e) {
       if (!kept || kept.state !== 'done' || (e as { reason?: string }).reason === 'signed-out') throw e;
-      return { id, title: kept.title, author: kept.author, narrator: kept.narrator, description: kept.description, cover: kept.cover,
-        duration: kept.duration, progress: kept.duration ? kept.position / kept.duration : 0, currentTime: kept.position, chapters: kept.chapters };
+      return { ...empty, id, title: kept.title, author: kept.author, narrator: kept.narrator, description: htmlToText(kept.description), cover: kept.cover,
+        duration: kept.duration, progress: kept.duration ? kept.position / kept.duration : 0, currentTime: kept.position, chapters: kept.chapters,
+        size: kept.tracks.reduce((s, t) => s + t.bytes, 0) };
     }
     const i = fetched as Item & {
+      libraryId?: string; size?: number;
       media: { chapters?: unknown[] };
       userMediaProgress?: Progress | null;
     };
-    const m = i.media.metadata;
-    const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : str(x?.name))).filter(Boolean).join(', ') : '');
+    const m = i.media.metadata as Record<string, unknown> & { authors?: { id?: string; name?: string }[]; series?: { id?: string; name?: string; sequence?: string }[]; genres?: unknown[] };
     const p = i.userMediaProgress;
+    const author = m.authors?.[0], series = m.series?.[0];
+    const [moreInSeries, moreByAuthor] = await Promise.all([
+      series?.id && i.libraryId ? shelfOf(store, `/api/libraries/${encodeURIComponent(i.libraryId)}/items?filter=series.${encodeURIComponent(base64(series.id))}&sort=sequence&minified=1`, id) : [],
+      author?.id ? shelfOf(store, `/api/authors/${encodeURIComponent(author.id)}?include=items`, id) : [],
+    ]);
     return {
       id: i.id,
       title: str(m.title) || 'Untitled',
+      subtitle: str(m.subtitle),
       author: names(m.authors) || str(m.authorName),
+      authorId: str(author?.id),
       narrator: names(m.narrators) || str(m.narratorName),
-      description: str(m.description).replace(/<[^>]+>/g, ''),
+      description: htmlToText(str(m.description)),
       cover: coverUrl(store, i.id),
       duration: num(i.media.duration),
       progress: p ? (p.isFinished ? 1 : num(p.progress)) : 0,
       currentTime: p ? num(p.currentTime) : 0,
       chapters: chapters(i.media.chapters),
+      seriesId: str(series?.id),
+      seriesName: str(series?.name),
+      seriesSequence: str(series?.sequence),
+      genres: (m.genres ?? []).map(str).filter(Boolean),
+      publishedYear: str(m.publishedYear),
+      publisher: str(m.publisher),
+      language: str(m.language),
+      isbn: str(m.isbn),
+      asin: str(m.asin),
+      size: num(i.size),
+      // The rest of the author's books leave out what is already on the series shelf.
+      moreInSeries,
+      moreByAuthor: moreByAuthor.filter((b) => !moreInSeries.some((x) => x.id === b.id)),
     };
   },
 
@@ -560,6 +602,7 @@ function downloadInfo(e: offline.Entry) {
     tracksDone: e.tracks.filter((t) => t.done).length, tracksTotal: e.tracks.length,
     progress: e.state === 'done' ? 1 : total ? done / total : 0,
     listened: e.duration ? Math.min(1, e.position / e.duration) : 0,
+    bytes: e.tracks.reduce((s, t) => s + t.bytes, 0),
   };
 }
 

@@ -172,7 +172,7 @@ test "series, authors and collections each have a page, and a page of its own pe
   expect text "page-title" == "Dune Chronicles"
   expect state seriesPage.entries.0 .book.id == "li_dune"
   expect state seriesPage.entries.1 .book.id == "li_messiah"
-  expect text "series-caption-li_messiah" == "Book 2"
+  expect text "series-caption-li_messiah" == "2"
   back
   clock settle
   tap "view-authors"
@@ -184,7 +184,8 @@ test "series, authors and collections each have a page, and a page of its own pe
   clock settle
   expect text "author-title" == "Frank Herbert"
   expect text "author-count" == "2 books"
-  expect text "author-bio" == "American science-fiction author best known for Dune and its sequels."
+  expect tree has "author-bio"
+  expect text "author-bio-more" == "More"
   expect state authorPage.image == "http://127.0.0.1:13378/api/authors/au_herbert/image"
   expect tree has "authorbook-li_messiah"
   tap "authorseries-se_dune"

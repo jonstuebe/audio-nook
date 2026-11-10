@@ -33,7 +33,7 @@ test "a book downloads a track at a time, plays with no network, and its progres
   clock data
   expect state downloads.0 .state == "done"
   expect text "download-state" == "Downloaded"
-  expect tree has "download-delete"
+  expect tree has "download-badge"
   back
   clock settle
   expect tree has "book-kept-li_dune"
@@ -106,6 +106,8 @@ test "a download can be cancelled, and a downloaded book removed"
   clock +300
   clock data
   expect state downloads.0 .state == "done"
+  tap "detail-more"
+  clock settle
   tap "download-delete"
   clock data
   expect state downloads == []

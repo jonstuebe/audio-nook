@@ -13,6 +13,7 @@
 // (MeController.batchUpdateMediaProgress: an array of { libraryItemId, currentTime, duration,
 // progress, isFinished }) whenever the server answers; what it can't take stays queued.
 import type { Storage } from './app.contract.d.ts';
+import { htmlToText } from './text.ts';
 
 export const DIR = 'app:/data/downloads';
 const INDEX = `${DIR}/index.json`;
@@ -88,7 +89,7 @@ export async function plan(storage: Storage, authed: Authed, id: string): Promis
   await update(storage, (all) => {
     all[id] = {
       id, libraryId: str(item.libraryId), title: str(m.title) || 'Untitled', author: names(m.authors) || str(m.authorName),
-      narrator: names(m.narrators) || str(m.narratorName), description: str(m.description).replace(/<[^>]+>/g, ''),
+      narrator: names(m.narrators) || str(m.narratorName), description: htmlToText(str(m.description)),
       duration: num(item.media.duration), cover, tracks, state: 'downloading', error: '',
       // Where the listener is now, so the book opens there with no network.
       position: Math.max(all[id]?.position ?? 0, num(item.userMediaProgress?.currentTime)),

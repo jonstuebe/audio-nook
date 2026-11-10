@@ -19,16 +19,27 @@ type Book = {
   authorId: string; series?: { id: string; name: string; sequence: string };
   // A cover's pixel size: most are square, as audiobook covers are; The Martian's is a print cover.
   coverSize?: [number, number];
+  // BookMetadata's fields (Book.oldMetadataToJSON): the description is HTML, as ABS stores it.
+  subtitle?: string; genres?: string[]; publishedYear?: string; publisher?: string; language?: string; isbn?: string; asin?: string;
   tracks: { title: string; duration: number }[];
   chapters: { id: number; start: number; end: number; title: string }[];
 };
+
+// The description of Dune, as a publisher's blurb arrives in ABS: paragraphs, emphasis, entities.
+const DUNE_HTML = [
+  '<p>Set on the desert planet <b>Arrakis</b>, <i>Dune</i> is the story of the boy Paul Atreides, heir to a noble family tasked with ruling an inhospitable world where the only thing of value is the &ldquo;spice&rdquo; melange, a drug capable of extending life and enhancing consciousness.</p>',
+  '<p>Coveted across the known universe, melange is a prize worth killing for&hellip; When House Atreides is betrayed, the destruction of Paul&rsquo;s family will set the boy on a journey toward a destiny greater than he could ever have imagined.</p>',
+  '<p>And as he evolves into the mysterious man known as Muad&rsquo;Dib, he will bring to fruition humankind&rsquo;s most ancient and unattainable dream.<br>A stunning blend of adventure and mysticism, environmentalism and politics, <i>Dune</i> won the first Nebula Award, shared the Hugo Award, and formed the basis of what is undoubtedly the grandest epic in science fiction.</p>',
+].join('');
 
 const threeChapters = (titles: string[]) => titles.map((title, i) => ({ id: i, start: i * 40, end: (i + 1) * 40, title }));
 
 export const BOOKS: Book[] = [
   {
     id: 'li_dune', libraryId: 'lib_books', title: 'Dune', author: 'Frank Herbert', narrator: 'Scott Brick',
-    description: 'A desert planet, a noble family, and the spice that everyone wants.', addedAt: 1_690_000_000_000,
+    description: DUNE_HTML, addedAt: 1_690_000_000_000,
+    genres: ['Science Fiction', 'Classics', 'Space Opera'], publishedYear: '1965', publisher: 'Macmillan Audio', language: 'English',
+    isbn: '9781427201430', asin: 'B002V1OF70',
     authorId: 'au_herbert', series: { id: 'se_dune', name: 'Dune Chronicles', sequence: '1' },
     color: [196, 140, 72],
     tracks: [{ title: 'Part 1', duration: 60 }, { title: 'Part 2', duration: 60 }],
@@ -36,7 +47,8 @@ export const BOOKS: Book[] = [
   },
   {
     id: 'li_hobbit', libraryId: 'lib_books', title: 'The Hobbit', author: 'J. R. R. Tolkien', narrator: 'Andy Serkis',
-    description: 'In a hole in the ground there lived a hobbit.', addedAt: 1_691_000_000_000,
+    description: '<p>In a hole in the ground there lived a hobbit.</p><p>Bilbo Baggins is swept into a quest to reclaim the lost Dwarf Kingdom of Erebor from the fearsome dragon Smaug.</p>', addedAt: 1_691_000_000_000,
+    genres: ['Fantasy', 'Classics'], publishedYear: '1937', publisher: 'Recorded Books', language: 'English', asin: 'B0099SNIXS',
     authorId: 'au_tolkien', series: { id: 'se_middle', name: 'Middle-earth', sequence: '1' },
     color: [72, 128, 88],
     tracks: [{ title: 'The Hobbit', duration: 120 }],
@@ -60,10 +72,11 @@ export const BOOKS: Book[] = [
   },
   {
     id: 'li_messiah', libraryId: 'lib_books', title: 'Dune Messiah', author: 'Frank Herbert', narrator: 'Scott Brick',
-    description: 'Twelve years after Arrakis, the emperor sees where his legend leads.', addedAt: 1_694_000_000_000,
+    description: '<p>Twelve years after Arrakis, the emperor sees where his legend leads.</p><p>Paul Atreides rules an empire of a thousand worlds, and his visions show him only one path through the coming storm.</p>', addedAt: 1_694_000_000_000,
+    genres: ['Science Fiction', 'Classics'], publishedYear: '1969', publisher: 'Macmillan Audio', language: 'English',
     color: [150, 110, 60], authorId: 'au_herbert', series: { id: 'se_dune', name: 'Dune Chronicles', sequence: '2' },
     tracks: [{ title: 'Dune Messiah', duration: 120 }],
-    chapters: threeChapters(['Part One', 'Part Two', 'Part Three']),
+    chapters: Array.from({ length: 12 }, (_, i) => ({ id: i, start: i * 10, end: (i + 1) * 10, title: `Chapter ${i + 1}` })),
   },
   // The Archive: sixty books by one author, added a day apart, none started.
   ...Array.from({ length: 60 }, (_, i): Book => {
@@ -79,7 +92,7 @@ export const BOOKS: Book[] = [
 
 // Authors (AuthorController / Author.toOldJSON): Frank Herbert has a photo and a bio.
 export const AUTHORS = [
-  { id: 'au_herbert', name: 'Frank Herbert', description: 'American science-fiction author best known for Dune and its sequels.', image: [92, 78, 66] as [number, number, number] },
+  { id: 'au_herbert', name: 'Frank Herbert', description: 'American science-fiction author best known for Dune and its sequels.\n\nBorn in Tacoma, Washington, in 1920, Herbert worked as a newspaper reporter, photographer and lecturer before Dune, which he spent six years researching and writing, was published in 1965. It became one of the best-selling science-fiction novels of all time, and he followed it with five sequels.', image: [92, 78, 66] as [number, number, number] },
   { id: 'au_tolkien', name: 'J. R. R. Tolkien', description: 'English writer and philologist, author of The Hobbit and The Lord of the Rings.', image: null },
   { id: 'au_weir', name: 'Andy Weir', description: '', image: null },
   { id: 'au_donaldson', name: 'Julia Donaldson', description: 'Children’s author and former Children’s Laureate.', image: null },

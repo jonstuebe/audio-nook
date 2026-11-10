@@ -1,0 +1,312 @@
+// Audio Nook's detail pages, after Apple Books' and Music's on macOS 26: a book (a hero over an
+// ambient backdrop drawn from its cover, the About text, an Information grid, chapters, and shelves
+// of the rest of its series and its author), and the headers and lists of an author, a series and
+// a collection. app.contract places them; app.ts answers them.
+use EmptyState from "exact:content"
+use Book, DownloadInfo, Shelf, SeriesEntry from "./library.contract"
+use clockText, lengthText, progressText, percentText, booksText, initials from "./library.contract"
+use ShelfRow, CoverStack, AuthorPhoto from "./library.contract"
+
+shape Chapter
+  id: number
+  title: string
+  start: number
+  end: number
+
+// A book's page (app.ts's itemDetail): Book.oldMetadataToJSONExpanded's metadata, the description
+// as plain paragraphs, its first series and author, and the books beside it on its shelves.
+shape Detail
+  id: string
+  title: string
+  subtitle: string
+  author: string
+  authorId: string
+  narrator: string
+  description: string
+  cover: string
+  duration: number
+  progress: number
+  currentTime: number
+  chapters: Chapter[]
+  seriesId: string
+  seriesName: string
+  seriesSequence: string
+  genres: string[]
+  publishedYear: string
+  publisher: string
+  language: string
+  isbn: string
+  asin: string
+  size: number
+  moreInSeries: Book[]
+  moreByAuthor: Book[]
+
+// 4500 → "1h 15m left", 300 → "5m left", 20 → "Less than a minute left"
+fn leftText(secs: number): string = secs < 60 ? "Less than a minute left" : floor(secs / 3600) > 0 ? `${floor(secs / 3600)}h ${floor(secs / 60) - floor(secs / 3600) * 60}m left` : `${round(secs / 60)}m left`
+// 1536000 → "1.5 MB": the decimal units Finder shows.
+fn sizeText(bytes: number): string = bytes >= 1000000000 ? `${(bytes / 1000000000).toFixed(1)} GB` : bytes >= 1000000 ? `${(bytes / 1000000).toFixed(1)} MB` : `${max(1, round(bytes / 1000))} KB`
+fn chaptersText(n: number): string = `${n} ${n == 1 ? "chapter" : "chapters"}`
+// The hero's one line of facts: the first genre, the year, the length, each only when known.
+fn factsLine(d: Detail): string = [match first(d.genres) { case some(g) => g, case none => "" }, d.publishedYear, lengthText(d.duration)].filter(x => x != "").join(" · ")
+// A description long enough to clamp: more than one paragraph, or more than about four lines.
+fn isLong(text: string): bool = text.length > 320 or text.includes("\n")
+fn seriesLine(d: Detail): string = d.seriesSequence == "" ? d.seriesName : `Book ${d.seriesSequence} of ${d.seriesName}`
+
+component ItemDetail
+  props
+    item: Detail
+    play: action
+    playFrom: action
+    starting: bool
+    isCurrent: bool
+    currentChapter: number
+    dlState: string
+    dlProgress: number
+    dlError: string
+    dlBytes: number
+    download: action
+    removeDownload: action
+    starts: bool
+    finish: action
+    copyLink: action
+    menu: action
+    playNow: action
+    downloads: DownloadInfo[]
+  state aboutOpen = false
+  state allChapters = false
+  action toggleAbout
+    aboutOpen = not aboutOpen
+  action toggleChapters
+    allChapters = not allChapters
+  view
+    column testId="detail"
+      // The hero: the cover beside its title and actions when wide, above them when narrow, over
+      // an ambient backdrop of the cover itself, blurred, saturated and faded into the window.
+      column position="relative" overflow="hidden"
+        image item.cover alt="" position="absolute" top="-20%" left="-10%" width="120%" height="140%" object-fit="cover"
+          filter="blur(60px) saturate(1.6)" opacity=0.5 mask-image="linear-gradient(to bottom, black 0%, black 30%, transparent 80%)"
+          aria-hidden=true testId="detail-backdrop"
+        row position="relative" gap=36 align-items="flex-end" flex-wrap="wrap" padding="40px 32px 48px"
+          column width=260 height=260 flex-shrink=0 justify-content="flex-end" align-items="center"
+            image item.cover alt=item.title max-width="100%" max-height="100%" border-radius=8
+              box-shadow="0 14px 34px rgba(0, 0, 0, 0.36)" testId="detail-cover"
+          column gap=6 flex="1 1 20rem" min-width=0
+            if item.seriesId != ""
+              link href=path("series", item.seriesId) aria-label=`Series: ${seriesLine(item)}` testId="detail-series-link"
+                text seriesLine(item) font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" testId="detail-series"
+            text item.title font="-exact-large-title" font-weight=700 testId="detail-title"
+            if item.subtitle != ""
+              text item.subtitle font="-exact-title3" color="-exact-secondary-label" testId="detail-subtitle"
+            if item.authorId != ""
+              link href=path("author", item.authorId) aria-label=`Author: ${item.author}` testId="detail-author-link"
+                text item.author font="-exact-title3" color="AccentColor" testId="detail-author"
+            else
+              text item.author font="-exact-title3" testId="detail-author"
+            if item.narrator != ""
+              text `Narrated by ${item.narrator}` color="-exact-secondary-label" testId="detail-narrator"
+            text factsLine(item) font="-exact-subheadline" color="-exact-secondary-label" testId="detail-meta"
+            // Where the listener is: a slim bar and the time left, or finished.
+            if item.progress >= 1
+              row gap=6 align-items="center" padding-top=4
+                image "symbol:checkmark" font-size=12 color="-exact-secondary-label"
+                text "Finished" font="-exact-subheadline" color="-exact-secondary-label" testId="detail-progress"
+            else if item.progress > 0
+              row gap=10 align-items="center" padding-top=4
+                progress value=item.progress max=1 width="9rem" testId="detail-progress-bar"
+                text leftText(item.duration - item.currentTime) font="-exact-subheadline" color="-exact-secondary-label" testId="detail-progress"
+            row gap=10 align-items="center" flex-wrap="wrap" padding-top=12
+              button press=play disabled=starting buttonStyle="prominent-glass" testId="play"
+                image "symbol:play-fill"
+                text (starting ? "Starting…" : isCurrent ? "Resume" : item.progress >= 1 ? "Play Again" : item.currentTime > 0 ? "Continue" : "Play")
+              if dlState == "done"
+                row gap=6 align-items="center" padding="0 6px" testId="download-badge"
+                  image "symbol:download" color="-exact-secondary-label"
+                  text "Downloaded" color="-exact-secondary-label" testId="download-state"
+              else if dlState == "downloading"
+                row gap=8 align-items="center" padding="0 4px"
+                  progress value=dlProgress max=1 width="6rem" testId="download-progress"
+                  text `Downloading ${percentText(dlProgress)}` color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="download-state"
+                button press=removeDownload buttonStyle="glass" aria-label="Cancel Download" testId="download-cancel"
+                  text "Cancel"
+              else
+                button press=download disabled=starts buttonStyle="glass" testId="download"
+                  image "symbol:download"
+                  text (starts ? "Preparing…" : dlState == "failed" ? "Try Download Again" : "Download")
+              button popovertarget="detail-menu" buttonStyle="glass" aria-label="More Actions" testId="detail-more"
+                image "symbol:ellipsis"
+            if dlState == "failed"
+              text dlError color="-exact-system-red" font="-exact-footnote" testId="download-error"
+      column gap=36 padding="8px 32px 120px"
+        // About: four lines, then More; paragraphs kept, at a line length that reads.
+        if item.description != ""
+          column gap=8 max-width="42rem"
+            text "About" font="-exact-title2" font-weight=700
+            text (aboutOpen ? item.description : item.description.replaceAll("\n\n", " ").replaceAll("\n", " ")) white-space="pre-line"
+              line-height=1.5 line-clamp=(aboutOpen ? 0 : 4) testId="detail-description"
+            if isLong(item.description)
+              row
+                button press=toggleAbout buttonStyle="borderless" aria-expanded=aboutOpen testId="detail-about-more"
+                  text (aboutOpen ? "Less" : "More") font-weight=600
+        // Information, as Books lists it: genres as tags, then what ABS knows of the edition.
+        column gap=14
+          text "Information" font="-exact-title2" font-weight=700
+          if item.genres.length > 0
+            row gap=8 flex-wrap="wrap" testId="info-genres"
+              for g, gi in item.genres key=g
+                text g font="-exact-subheadline" padding="4px 12px" border-radius=999 background-color="-exact-secondary-fill" testId=`info-genre-${gi}`
+          column display="grid" grid-template-columns="repeat(auto-fill, minmax(10rem, 1fr))" column-gap=24 row-gap=16
+            InfoCell(label="Length", value=lengthText(item.duration), cellId="info-length")
+            InfoCell(label="Chapters", value=`${item.chapters.length}`, cellId="info-chapters")
+            if item.publishedYear != ""
+              InfoCell(label="Published", value=item.publishedYear, cellId="info-year")
+            if item.publisher != ""
+              InfoCell(label="Publisher", value=item.publisher, cellId="info-publisher")
+            if item.language != ""
+              InfoCell(label="Language", value=item.language, cellId="info-language")
+            if item.narrator != ""
+              InfoCell(label="Narrator", value=item.narrator, cellId="info-narrator")
+            if item.isbn != ""
+              InfoCell(label="ISBN", value=item.isbn, cellId="info-isbn")
+            if item.asin != ""
+              InfoCell(label="ASIN", value=item.asin, cellId="info-asin")
+            if item.size > 0
+              InfoCell(label="Size", value=sizeText(item.size), cellId="info-size")
+            if dlState == "done"
+              InfoCell(label="On This Mac", value=sizeText(dlBytes), cellId="info-downloaded")
+        // Chapters: the first eight, then Show All; the one playing marked; a click plays from it.
+        if item.chapters.length > 0
+          column gap=6
+            row align-items="baseline" gap=12
+              text "Chapters" font="-exact-title2" font-weight=700 flex=1
+              text chaptersText(item.chapters.length) color="-exact-secondary-label"
+            column
+              for c in (allChapters ? item.chapters : item.chapters.slice(0, 8)) key=c.id
+                column
+                  row press=playFrom(c.start) role="button" tabindex=0 aria-label=`Play from ${c.title}` gap=12 align-items="center" padding="10px 8px"
+                    border-radius=8 background-color=(isCurrent and currentChapter == c.id ? "-exact-secondary-fill" : "transparent") testId=`detail-chapter-${c.id}`
+                    if isCurrent and currentChapter == c.id
+                      image "symbol:waveform" color="AccentColor" width="2rem" aria-label="Now playing" testId=`detail-chapter-current-${c.id}`
+                    else
+                      text `${c.id + 1}` color="-exact-secondary-label" font-variant-numeric="tabular-nums" width="2rem"
+                    text c.title flex=1 min-width=0 font-weight=(isCurrent and currentChapter == c.id ? 600 : 400)
+                    text clockText(c.end - c.start) font-variant-numeric="tabular-nums" color="-exact-secondary-label"
+                  hr
+            if item.chapters.length > 8
+              row
+                button press=toggleChapters buttonStyle="borderless" aria-expanded=allChapters testId="detail-chapters-toggle"
+                  text (allChapters ? "Show Fewer" : `Show All ${item.chapters.length} ${item.chapters.length == 1 ? "Chapter" : "Chapters"}`)
+        // The rest of the series, and the author's other books, as Books' shelves.
+        if item.moreInSeries.length > 0
+          ShelfRow(shelf=Shelf(id="more-series", label=`More in ${item.seriesName}`, kind="book", books=item.moreInSeries, series=[], authors=[]),
+            downloads=downloads, menu=menu, playNow=playNow)
+        if item.moreByAuthor.length > 0
+          ShelfRow(shelf=Shelf(id="more-author", label=`More by ${item.author}`, kind="book", books=item.moreByAuthor, series=[], authors=[]),
+            downloads=downloads, menu=menu, playNow=playNow)
+      // The … menu.
+      column id="detail-menu" popover="auto" role="menu" aria-label="More Actions"
+        button press=finish popovertarget="detail-menu" popovertargetaction="hide" testId="detail-menu-finish"
+          image "symbol:checkmark"
+          text (item.progress >= 1 ? "Mark as Not Finished" : "Mark as Finished")
+        if item.seriesId != ""
+          link href=path("series", item.seriesId) role="menuitem" testId="detail-menu-series"
+            image "symbol:layers"
+            text `Show in ${item.seriesName}`
+        if item.authorId != ""
+          link href=path("author", item.authorId) role="menuitem" testId="detail-menu-author"
+            image "symbol:person"
+            text `Go to ${item.author}`
+        if dlState == "done"
+          button press=removeDownload destructive=true popovertarget="detail-menu" popovertargetaction="hide" testId="download-delete"
+            image "symbol:delete"
+            text "Remove Download"
+        button press=copyLink popovertarget="detail-menu" popovertargetaction="hide" testId="detail-menu-copy"
+          image "symbol:copy"
+          text "Copy Link"
+
+// One fact in the Information grid: its label over its value.
+component InfoCell
+  props
+    label: string
+    value: string
+    cellId: string
+  view
+    column gap=2 min-width=0 testId=cellId
+      text label.toUpperCase() font="-exact-caption1" font-weight=600 color="-exact-secondary-label"
+      text value white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${cellId}-value`
+
+// An author's header: the photo large and round over a backdrop of itself, the name, how many
+// books, and the bio at four lines with More.
+component AuthorHeader
+  props
+    name: string
+    image: string
+    count: number
+    bio: string
+  state open = false
+  action toggle
+    open = not open
+  view
+    column position="relative" overflow="hidden"
+      if image != ""
+        image image alt="" position="absolute" top="-20%" left="-10%" width="120%" height="140%" object-fit="cover"
+          filter="blur(60px) saturate(1.4)" opacity=0.42 mask-image="linear-gradient(to bottom, black 0%, black 30%, transparent 80%)" aria-hidden=true
+      row position="relative" gap=32 align-items="center" flex-wrap="wrap" padding="40px 32px 24px"
+        column border-radius=999 box-shadow="0 14px 36px rgba(0, 0, 0, 0.3)"
+          AuthorPhoto(name=name, image=image, size=180)
+        column gap=8 flex="1 1 20rem" min-width=0 max-width="44rem"
+          text "Author" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label"
+          text name font="-exact-large-title" font-weight=700 testId="author-title"
+          text booksText(count) color="-exact-secondary-label" testId="author-count"
+          if bio != ""
+            text (open ? bio : bio.replaceAll("\n\n", " ").replaceAll("\n", " ")) white-space="pre-line" line-height=1.5 line-clamp=(open ? 0 : 4) testId="author-bio"
+            if isLong(bio)
+              row
+                button press=toggle buttonStyle="borderless" aria-expanded=open testId="author-bio-more"
+                  text (open ? "Less" : "More") font-weight=600
+
+// A series' or collection's header: its covers fanned, its name, and what is in it.
+component GroupHeader
+  props
+    kind: string
+    name: string
+    covers: string[]
+    facts: string
+    note: string
+  view
+    row gap=32 align-items="flex-end" flex-wrap="wrap" padding="40px 32px 24px"
+      column width=200 flex-shrink=0
+        CoverStack(covers=covers)
+      column gap=6 flex="1 1 20rem" min-width=0 max-width="44rem"
+        text kind font="-exact-subheadline" font-weight=600 color="-exact-secondary-label"
+        text name font="-exact-large-title" font-weight=700 testId="page-title"
+        text facts color="-exact-secondary-label" testId="page-subtitle"
+        if note != ""
+          text note line-height=1.5 testId="page-note"
+
+// Books as numbered rows, as Books lists a series: its place, the cover, title and author, the
+// length, and where the listener is. A right-click opens the book's menu.
+component NumberedBooks
+  props
+    entries: SeriesEntry[]
+    prefix: string
+    numbered: bool
+    menu: action
+  view
+    column padding="0 32px 120px"
+      for e in entries key=e.book.id
+        column
+          link href=path("item", e.book.id) aria-label=`${e.book.title}, ${e.book.author}` contextmenu=menu(e.book) contextPopover="book-menu" testId=`${prefix}-${e.book.id}`
+            row gap=16 align-items="center" padding="10px 4px"
+              if numbered
+                text e.sequence font="-exact-title3" font-weight=600 color="-exact-secondary-label" font-variant-numeric="tabular-nums" width="2.5rem" text-align="center"
+                  testId=`${prefix}-caption-${e.book.id}`
+              image e.book.cover alt="" width=56 height=56 border-radius=6 object-fit="cover" background-color="-exact-secondary-fill"
+              column flex=1 min-width=0 gap=2
+                text e.book.title font-weight=600 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-title-${e.book.id}`
+                text e.book.author font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+              text lengthText(e.book.duration) color="-exact-secondary-label" font-variant-numeric="tabular-nums" width="4rem" text-align="end"
+              column width="8rem" gap=4 align-items="flex-end"
+                if e.book.progress > 0 and e.book.progress < 1
+                  progress value=e.book.progress max=1 width="6rem"
+                text progressText(e.book.progress) font="-exact-footnote" color="-exact-secondary-label" testId=`${prefix}-progress-${e.book.id}`
+          hr
