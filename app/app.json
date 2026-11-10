@@ -12,16 +12,26 @@
   "host": {
     "web": {},
     "macos": {
-      "appTransportSecurity": { "allowsArbitraryLoads": true }
+      "appTransportSecurity": {
+        "allowsArbitraryLoads": true
+      }
     }
   },
   "commands": {
-    "server": ["bun", "mock/server.ts"]
+    "server": [
+      "bun",
+      "mock/server.ts"
+    ]
   },
-  "server": { "database": false },
+  "server": {
+    "database": false
+  },
   "deploy": {
     "store": {
       "web": "0"
     }
-  }
+  },
+  "modules": [
+    "nook-mini-player"
+  ]
 }

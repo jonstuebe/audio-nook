@@ -12,6 +12,9 @@ it says otherwise.
 | `app/app.contract` | The view, its state and actions: sign-in, sidebar sections, cover grids, search, item detail, player, mini player |
 | `app/app.ts` | Every Audiobookshelf API call, and the sign-in kept in the Keychain |
 | `app/app.test.contract` | The tests, run against the mock server on every host |
+| `app/miniplayer.test.contract` | The Mini Player window (macOS only) |
+| `app/modules/apple/MiniPlayer.swift`, `app/modules/web/index.js` | The app's native module: the Mini Player window (`nook-mini-player`) |
+| `app/tools/test-all.sh` | Every test file on web, macOS, and macOS under the platform's chrome, plus the window checks |
 | `app/sidebar.test.contract` | The Mac's own sidebar: rows and ⌃⌘S (macOS only, under `--chrome platform`) |
 | `app/tools/check-sidebar.mjs` | Drives the Mac app and reads the window: the sidebar's selection and collapse |
 | `app/tools/screenshots.mjs` | Captures `docs/screenshots/*-{light,dark}.png` in the real window |
@@ -58,6 +61,9 @@ bun mock/server.ts           # PORT=… picks another port; ACCESS_TTL_MS=… sh
 
 ## Run the tests
 
+`bun tools/test-all.sh` (in `app/`) runs everything below: every test file on web, macOS and
+macOS under the platform's chrome, then the window checks.
+
 `test` builds the app, starts `mock/server.ts` itself (it is app.json's `commands.server`, at the
 `MOCK_SERVER` address in `app.ts`), runs `app.test.contract` and stops the server:
 
@@ -97,6 +103,10 @@ The tests cover:
   the library chosen in the sidebar, and a result opens its detail.
 - **Mini player:** it shows while you browse other sections, plays, pauses and skips, and opens the
   player.
+- **Mini Player window** (macOS): opens from the player, the mini player and ⌥⌘M. Its own buttons
+  (typed at it by the agent, which presses the real `NSButton`s) play, pause, skip, change chapter,
+  seek and float. It says back what it shows, which the test compares with the main player's state
+  in both directions.
 - **Item detail:** author, narrator, description, length and chapters.
 - **Playback:** a session starts at the saved position. The test covers play/pause, ±30 s across
   a track boundary, next/previous chapter, a chapter tap and speed. It also checks that the server
@@ -157,6 +167,14 @@ colours and fonts.
 - **Now Playing:** the `audio` element is AVPlayer, with Media Session metadata for Control Center
   and the media keys.
 
+- **Mini Player window:** a separate `NSPanel` (Window ▸ Mini Player, ⌥⌘M, or the button on the
+  mini player and in the player's toolbar) with an `NSGlassEffectView` behind cover art, title,
+  chapter, an `NSSlider`, glass `NSButton`s (previous/next chapter, ±30 s, play/pause) and a pin
+  that floats it above other apps (`NSWindow.Level.floating`, remembered). It is the app's own
+  native module, `nook-mini-player` (`app/modules/apple/MiniPlayer.swift`). Contract gives it the
+  player's state as props and handles its buttons' messages, so it is always in step with the
+  main player. AppKit autosaves its position.
+
 **Approximated (Exact has no such primitive yet):**
 
 - **Search field in the sidebar.** Exact's sidebar holds only rows, so search is a Search row whose
@@ -173,6 +191,9 @@ colours and fonts.
   keyboard-selectable collection item.
 - **Mini player placement.** It floats in glass over the page's foot. Exact has no
   toolbar-accessory or window-bottom-bar API, which is where Music puts it.
+- **A second window.** Contract has no window of its own beyond the main one, so the Mini Player
+  is a native module that owns an `NSPanel`. Its content is AppKit, not Contract. On the web the
+  tag draws nothing, and the in-page mini player is the only one.
 - **Sidebar collapse in tests.** Contract tests can't read the window, so `tools/check-sidebar.mjs`
   checks collapse through `state window`.
 

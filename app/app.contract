@@ -114,6 +114,11 @@ component App
   state lastSynced = 0
   // Renewals of the access token the audio URLs carry, and whether this load has already tried one.
   state tokenGen = 0
+  // The Mini Player window (the Mac's own panel, modules/apple/MiniPlayer.swift): whether it is
+  // open, whether it floats above other apps, and, under the agent, what it says it shows.
+  state miniWindow = false
+  state miniFloating = false persist
+  state miniShown = ""
   state mediaRetried = false
 
   resource session = session() as shape Session else empty()
@@ -301,6 +306,32 @@ component App
     stopPlayback()
     nav = back(nav)
 
+  // Window ▸ Mini Player (⌥⌘M), and the buttons on the mini player and the player.
+  action toggleMiniWindow
+    miniWindow = not miniWindow
+  // What the Mini Player window's controls say: the same actions as the main player's.
+  action onMini(message: string)
+    if message == "toggle"
+      toggle()
+    else if message == "back30"
+      skip(-30)
+    else if message == "forward30"
+      skip(30)
+    else if message == "previous"
+      previousChapter()
+    else if message == "next"
+      nextChapter()
+    else if message == "float:on"
+      miniFloating = true
+    else if message == "float:off"
+      miniFloating = false
+    else if message == "closed"
+      miniWindow = false
+    else if message.startsWith("seek:")
+      seek(match parseNumber(message.slice(5)) { case some(n) => n, case none => position })
+    else if message.startsWith("shown:")
+      miniShown = message.slice(6)
+
   view
     main testId="root" navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow
       width="100%" height="100%" display="flex" flex-direction="column"
@@ -393,6 +424,8 @@ component App
                       button id="back" press=back aria-label="Back"
                         image "symbol:back"
                       text "Now Playing" role="heading" aria-level=2 flex=1
+                      button press=toggleMiniWindow aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="player-mini-window"
+                        image "symbol:icon.mini-player"
                       button press=stopAndClose aria-label="Stop" testId="stop"
                         image "symbol:stop"
                     if playing
@@ -452,6 +485,8 @@ component App
               image (paused ? "symbol:play-fill" : "symbol:pause-fill")
             button press=skip(30) buttonStyle="glass" aria-label="Forward 30 Seconds" testId="mini-forward-30"
               image "symbol:skip-forward-30"
+            button press=toggleMiniWindow buttonStyle="glass" aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="mini-window-button"
+              image "symbol:icon.mini-player"
       // The sidebar (AppKit's source list on a Mac, a sidebar in a wide browser window).
       row role="tablist" aria-label="Audio Nook" display=(showSignIn ? "none" : "flex")
         button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=showTab("home") testId="tab-home" flex=1
@@ -473,6 +508,18 @@ component App
           seekbackwardOffset=30 seekforwardOffset=30 seekbackward=skip(-30) seekforward=skip(30)
           previoustrack=previousChapter nexttrack=nextChapter
           width=0 height=0 position="absolute" testId="player-audio"
+      // The Mini Player window: a 1-point anchor here, the window AppKit's.
+      nook-mini-player id="mini-window" testId="mini-window" position="absolute" width=1 height=1
+        open=(miniWindow and playing and not showSignIn ? "true" : "false") floating=(miniFloating ? "true" : "false")
+        bookTitle=nowTitle author=nowAuthor chapter=chapterTitle(chapters, chapter) cover=nowCover
+        seconds=`${round(position)}` duration=`${duration}` elapsed=clockText(position) remaining=`-${clockText(max(0, duration - position))}`
+        state=(paused ? "paused" : "playing") hasNext=(chapter + 1 < chapters.length ? "true" : "false")
+        message=onMini
+      // Menu bar commands (the Mac files them in its menus; elsewhere they are plain buttons, kept out of sight).
+      row position="absolute" width="0.0625rem" height="0.0625rem" overflow="hidden" opacity=0
+        button press=toggleMiniWindow -exact-menu="window" aria-keyshortcuts="Alt+Meta+M" disabled=(not playing)
+          aria-label=(miniWindow ? "Close Mini Player" : "Mini Player") testId="menu-mini-player"
+          text (miniWindow ? "Close Mini Player" : "Mini Player")
 
 component SignIn
   props

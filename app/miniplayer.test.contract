@@ -1,0 +1,73 @@
+// The Mini Player window: an `NSPanel` of the app's own native module (modules/apple/MiniPlayer.swift),
+// so a Mac's only. Typing at "mini-window" presses the panel's real buttons, and the panel says back
+// what it shows (`miniShown`: title | elapsed | playing or paused | floating or normal).
+
+test "the Mini Player opens from the player, the mini player and ⌥⌘M, and stays in step both ways" on macos
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "continue-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  clock +600 real
+  tap "play-pause"
+  clock +300 real
+  expect state paused == true
+  expect state miniWindow == false
+  tap "player-mini-window"
+  clock +500 real
+  expect state miniWindow == true
+  expect state miniShown == "Dune|0:45|paused|normal"
+  type "mini-window" "forward30"
+  clock +300 real
+  expect text "elapsed" == "1:15"
+  expect state track == 1
+  expect state miniShown == "Dune|1:15|paused|normal"
+  tap "back-30"
+  clock +300 real
+  expect state miniShown == "Dune|0:45|paused|normal"
+  type "mini-window" "next"
+  clock +300 real
+  expect text "player-chapter" == "Book Three: The Prophet"
+  type "mini-window" "previous"
+  clock +300 real
+  expect text "player-chapter" == "Book Two: Muad’Dib"
+  type "mini-window" "seek:20"
+  clock +300 real
+  expect text "elapsed" == "0:20"
+  expect state miniShown == "Dune|0:20|paused|normal"
+  type "mini-window" "float"
+  clock +300 real
+  expect state miniFloating == true
+  expect state miniShown == "Dune|0:20|paused|floating"
+  type "mini-window" "toggle"
+  clock +300 real
+  expect state paused == false
+  tap "play-pause"
+  clock +300 real
+  expect state paused == true
+  expect state miniShown == "Dune|0:20|paused|floating"
+  type "mini-window" "close"
+  clock +300 real
+  expect state miniWindow == false
+  expect state miniShown == ""
+  back
+  clock settle
+  tap "mini-window-button"
+  clock +300 real
+  expect state miniWindow == true
+  type "mini-play-pause" key "Alt+Meta+m"
+  clock +300 real
+  expect state miniWindow == false
+  type "mini-play-pause" key "Alt+Meta+m"
+  clock +300 real
+  expect state miniWindow == true
+  expect state miniShown == "Dune|0:20|paused|floating"
