@@ -1,0 +1,33 @@
+// The window's own sidebar (AppKit's source list), which only the Mac draws, and only under the
+// platform's chrome: `bun ../../exact/scripts/agent.mjs macos --app app --chrome platform --test
+// sidebar.test.contract` (with EXACT_APP_DIR set). Rows are pressed through AppKit's list, and
+// ⌃⌘S is View ▸ Show Sidebar. That the sidebar really collapses is read from the window, which a
+// test cannot see: tools/check-sidebar.mjs drives the same steps and reads `state window`.
+
+test "the sidebar's rows switch sections, and the page stays while ⌃⌘S hides and shows it" on macos
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect state nav.tab == "home"
+  expect text "continue-title-li_dune" == "Dune"
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect state nav.tab == "library"
+  expect state currentLibrary == "lib_kids"
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+  type "book-li_gruffalo" key "Control+Meta+s"
+  clock +600 real
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+  type "book-li_gruffalo" key "Control+Meta+s"
+  clock +600 real
+  tap "tab-search"
+  clock settle
+  expect state nav.tab == "search"
+  type "search" "the"
+  clock data
+  expect text "result-title-li_gruffalo" == "The Gruffalo"

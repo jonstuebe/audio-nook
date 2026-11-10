@@ -1,0 +1,7 @@
+tamber audionook
+
+icons
+  icon.backward-end-fill = icon(sf "backward.end.fill", svg "icons/backward-end-fill.svg")
+  icon.forward-end-fill = icon(sf "forward.end.fill", svg "icons/forward-end-fill.svg")
+  icon.headphones = icon(sf "headphones", svg "icons/headphones.svg")
+  icon.books-vertical = icon(sf "books.vertical", svg "icons/books-vertical.svg")

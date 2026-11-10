@@ -1,0 +1,587 @@
+// Audio Nook: an Audiobookshelf client. app.ts talks to the server; this file is the view, its
+// state and what each action changes. Signed out, the app is the sign-in form; signed in, a
+// library that pushes an item's detail, which pushes the player. The audio element lives beside
+// the screens, so a book keeps playing while you browse.
+use EmptyState from "exact:content"
+
+// Three sidebar sections: Listen Now, Search, and the library a library row chose. A book's
+// detail and the player push onto whichever is showing.
+routes nav
+  tab home "/"
+    item "/item/:id"
+    player "/player"
+  tab search "/search"
+  tab library "/library"
+
+shape Session
+  signedIn: bool
+  server: string
+  username: string
+  ended: bool
+
+shape Reply
+  ok: bool
+  error: string
+
+shape Library
+  id: string
+  name: string
+
+shape Book
+  id: string
+  title: string
+  author: string
+  cover: string
+  duration: number
+  progress: number
+
+shape Chapter
+  id: number
+  title: string
+  start: number
+  end: number
+
+shape Author
+  id: string
+  name: string
+
+shape SearchResults
+  query: string
+  books: Book[]
+  authors: Author[]
+
+shape Detail
+  id: string
+  title: string
+  author: string
+  narrator: string
+  description: string
+  cover: string
+  duration: number
+  progress: number
+  currentTime: number
+  chapters: Chapter[]
+
+shape Track
+  index: number
+  startOffset: number
+  duration: number
+  path: string
+
+shape PlaySession
+  id: string
+  itemId: string
+  title: string
+  author: string
+  cover: string
+  duration: number
+  currentTime: number
+  chapters: Chapter[]
+  tracks: Track[]
+
+fn two(n: number): string = n < 10 ? `0${n}` : `${n}`
+// 75 → "1:15", 3725 → "1:02:05"
+fn clockText(secs: number): string = floor(secs / 3600) > 0 ? `${floor(secs / 3600)}:${two(floor(secs / 60) - floor(secs / 3600) * 60)}:${two(floor(secs) - floor(secs / 60) * 60)}` : `${floor(secs / 60)}:${two(floor(secs) - floor(secs / 60) * 60)}`
+// 7380 → "2h 3m", 120 → "2m"
+fn lengthText(secs: number): string = floor(secs / 3600) > 0 ? `${floor(secs / 3600)}h ${floor(secs / 60) - floor(secs / 3600) * 60}m` : `${max(1, round(secs / 60))}m`
+fn progressText(p: number): string = p >= 1 ? "Finished" : p > 0 ? `${round(p * 100)}% listened` : "Not started"
+fn trackAt(tracks: Track[], at: number): number = max(0, tracks.filter(t => t.startOffset <= at).length - 1)
+fn offsetOf(tracks: Track[], i: number): number = match tracks.at(i) { case some(t) => t.startOffset, case none => 0 }
+fn urlOf(urls: string[], i: number): string = match urls.at(i) { case some(u) => u, case none => "" }
+fn chapterAt(chapters: Chapter[], at: number): number = max(0, chapters.filter(c => c.start <= at + 0.5).length - 1)
+fn chapterTitle(chapters: Chapter[], i: number): string = match chapters.at(i) { case some(c) => c.title, case none => "" }
+fn chapterStart(chapters: Chapter[], i: number): number = match chapters.at(i) { case some(c) => c.start, case none => 0 }
+fn rateText(r: number): string = `${r}×`
+// Which panel shows a tab's stack: a library's own for the library tab.
+fn holds(panel: string, tab: string, library: string): bool = tab == "library" ? panel == `library-${library}` : panel == tab
+fn nameOf(libraries: Library[], id: string): string = libraries.filter(l => l.id == id).map(l => l.name).join("")
+
+component App
+  // The sign-in form; the server's address is remembered for the next sign-in.
+  state server = "" persist
+  state username = ""
+  state password = ""
+  state libraryId = "" persist
+  state query = ""
+  // The player: which track plays, where in it, and where to go once it has loaded.
+  state paused = true
+  state track = 0
+  state at = 0
+  state pendingSeek = 0
+  // A seek the element hasn't finished: its time updates until then are from before it.
+  state seeking = false
+  state rate = 1
+  state lastSynced = 0
+  // Renewals of the access token the audio URLs carry, and whether this load has already tried one.
+  state tokenGen = 0
+  state mediaRetried = false
+
+  resource session = session() as shape Session else empty()
+  // "" while signed out, so a sign-in (even to the same server) asks every resource again.
+  derive api = session.signedIn ? session.server : ""
+  resource libraries = libraries(api) as shape Library[] else empty()
+  derive currentLibrary = libraries.filter(l => l.id == libraryId).length > 0 ? libraryId : match first(libraries) { case some(l) => l.id, case none => "" }
+  resource books = libraryItems(api, currentLibrary) as shape Book[] else empty()
+  resource continuing = inProgress(api, currentLibrary) as shape Book[] else empty()
+  derive selected = match stack(nav).filter(e => e.name == "item").at(-1) { case some(e) => e.params.id, case none => "" }
+  resource detail = itemDetail(api, selected) as shape Detail else empty()
+  derive panels = ["home", "search"].concat(libraries.map(l => `library-${l.id}`))
+  resource results = search(api, currentLibrary, query) as shape SearchResults else empty()
+
+  mutation loggedIn as shape Reply refreshes session, libraries, books, continuing, detail
+  mutation loggedOut as shape Reply refreshes session
+  mutation started as shape PlaySession then afterStart
+  mutation synced as shape Reply queue
+  mutation closed as shape Reply queue refreshes continuing, books, detail
+  mutation renewed as shape Reply then afterRenew
+
+  derive loginError = match loggedIn { case some(r) => r.error, case none => "" }
+  derive playing = match started { case some(s) => s.id != "", case none => false }
+  derive sessionId = match started { case some(s) => s.id, case none => "" }
+  derive tracks = match started { case some(s) => s.tracks, case none => [] }
+  derive chapters = match started { case some(s) => s.chapters, case none => [] }
+  derive duration = match started { case some(s) => s.duration, case none => 0 }
+  derive nowTitle = match started { case some(s) => s.title, case none => "" }
+  derive nowAuthor = match started { case some(s) => s.author, case none => "" }
+  derive nowCover = match started { case some(s) => s.cover, case none => "" }
+  derive nowItem = match started { case some(s) => s.itemId, case none => "" }
+  resource media = trackUrls(tracks.map(t => t.path), tokenGen) as shape string[] else empty()
+  derive position = offsetOf(tracks, track) + at
+  // A refresh the server refused (app.ts forgot the sign-in): any read that met it shows the form.
+  derive librariesCode = match failure(libraries) { case some(f) => f.code, case none => "" }
+  derive booksCode = match failure(books) { case some(f) => f.code, case none => "" }
+  derive continuingCode = match failure(continuing) { case some(f) => f.code, case none => "" }
+  derive detailCode = match failure(detail) { case some(f) => f.code, case none => "" }
+  derive renewSignedOut = match renewed { case some(rr) => rr.error == "signed-out", case none => false }
+  derive sessionEnded = session.ended or (session.signedIn and not pending(loggedIn) and (librariesCode == "signed-out" or booksCode == "signed-out" or continuingCode == "signed-out" or detailCode == "signed-out" or renewSignedOut))
+  derive showSignIn = not session.signedIn or sessionEnded
+  derive chapter = chapterAt(chapters, position)
+
+  // Every 15 s of playback the server hears where we are (ABS's own clients sync about as often).
+  task sync when playing and not paused
+    every(15000, syncNow)
+
+  action editServer(v: string)
+    server = v
+  action editUsername(v: string)
+    username = v
+  action editPassword(v: string)
+    password = v
+  action signIn
+    if not pending(loggedIn)
+      send loggedIn = login(server, username, password)
+      password = ""
+  action signOut
+    stopPlayback()
+    send loggedOut = logout()
+    nav = open(nav, "/")
+    server = session.server
+
+  // A library's row in the sidebar: that library, at its root.
+  action showLibrary(id: string)
+    libraryId = id
+    nav = select(nav, "library")
+  action showTab(name: string)
+    nav = select(nav, name)
+  action searchFor(v: string)
+    query = v
+  action back
+    nav = back(nav)
+  action follow(url: string)
+    nav = go(nav, url)
+  action openPlayer
+    nav = top(nav).name == "player" ? nav : push(nav, "/player")
+
+  action play(id: string)
+    if nowItem == id
+      paused = false
+      openPlayer()
+    else
+      closeCurrent()
+      paused = true
+      send started = startPlayback(id)
+  action afterStart
+    match started
+      case some(s)
+        let t = trackAt(s.tracks, s.currentTime)
+        let local = s.currentTime - offsetOf(s.tracks, t)
+        track = t
+        at = local
+        pendingSeek = local
+        seeking = true
+        lastSynced = s.currentTime
+        paused = false
+        nav = top(nav).name == "player" ? nav : push(nav, "/player")
+      case none
+        paused = true
+
+  action toggle
+    let next = not paused
+    paused = next
+    if not next
+      syncNow()
+  action hostPaused
+    paused = true
+  action hostPlaying
+    paused = false
+  action ticked(t: number)
+    if not seeking
+      at = t
+  action loaded
+    mediaRetried = false
+    fastSeek("player-audio", pendingSeek)
+  // Audio that stops loading may be an expired access token in its URL: renew once and load
+  // the same place again with the new one.
+  action mediaFailed(message: string)
+    if not mediaRetried and not pending(renewed)
+      mediaRetried = true
+      pendingSeek = at
+      seeking = true
+      send renewed = renewToken()
+  action afterRenew
+    match renewed
+      case some(rr)
+        if rr.ok
+          tokenGen = tokenGen + 1
+        else
+          paused = true
+      case none
+        paused = true
+  action seekDone
+    seeking = false
+  action trackEnded
+    if track + 1 < tracks.length
+      track = track + 1
+      at = 0
+      pendingSeek = 0
+      seeking = false
+    else
+      paused = true
+      syncNow()
+
+  // Seeking is in the book's time; the track that holds it plays from there.
+  action seek(to: number)
+    let target = max(0, min(to, duration - 0.25))
+    let t = trackAt(tracks, target)
+    let local = target - offsetOf(tracks, t)
+    at = local
+    pendingSeek = local
+    seeking = true
+    if t == track
+      fastSeek("player-audio", local)
+    else
+      track = t
+  action skip(by: number)
+    seek(position + by)
+  action scrubbed(v: number)
+    seek(v)
+  action previousChapter
+    // Within the first few seconds of a chapter, Previous goes to the one before; else to its start.
+    seek(position - chapterStart(chapters, chapter) < 3 ? chapterStart(chapters, max(0, chapter - 1)) : chapterStart(chapters, chapter))
+  action nextChapter
+    if chapter + 1 < chapters.length
+      seek(chapterStart(chapters, chapter + 1))
+  action setRate(v: string)
+    rate = match parseNumber(v) { case some(n) => n, case none => 1 }
+
+  action syncNow
+    if sessionId != ""
+      send synced = syncSession(sessionId, position, max(0, min(position - lastSynced, 60)), duration)
+      lastSynced = position
+  action closeCurrent
+    if sessionId != ""
+      send closed = closeSession(sessionId, position, max(0, min(position - lastSynced, 60)), duration)
+  action stopPlayback
+    closeCurrent()
+    paused = true
+    started = none
+    track = 0
+    at = 0
+  action stopAndClose
+    stopPlayback()
+    nav = back(nav)
+
+  view
+    main testId="root" navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow
+      width="100%" height="100%" display="flex" flex-direction="column"
+      if showSignIn
+        SignIn(server=server, username=username, password=password, error=(sessionEnded and loginError == "" ? "Your session has ended. Sign in again." : loginError), busy=pending(loggedIn),
+          editServer=editServer, editUsername=editUsername, editPassword=editPassword, signIn=signIn)
+      // The panels: one per sidebar row. A library's routes live in its own panel, so the
+      // sidebar marks the row of the library they show.
+      column flex=1 min-height=0 position="relative" display=(showSignIn ? "none" : "flex")
+        for p in panels key=p
+          column role="tabpanel" id=`panel-${p}` position="absolute" inset=0
+            for t in nav.tabs.filter(t => holds(p, t.name, currentLibrary)) key=t.name
+              for e in t.stack key=e.id
+                if e.name == "home"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" gap=8 padding="8px 16px"
+                      text "Listen Now" role="heading" aria-level=1 flex=1
+                      button press=signOut aria-label="Sign Out" testId="sign-out"
+                        image "symbol:sign-out"
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      column gap=28 padding="28px 32px 120px"
+                        LargeTitle(title="Listen Now", subtitle=session.username == "" ? session.server : `${session.username} · ${session.server}`)
+                        if failed(continuing)
+                          EmptyState(symbol="symbol:alert", title="Can’t Reach the Server", message=`Couldn’t load your books from ${session.server}.`)
+                        else if continuing.length == 0 and not pending(continuing)
+                          EmptyState(symbol="symbol:icon.headphones", title="Nothing in Progress", message="Books you start listening to appear here.")
+                            button press=showLibrary(currentLibrary) testId="empty-browse"
+                              text "Browse the Library"
+                        else
+                          column gap=14
+                            text "Continue Listening" font="-exact-title2" font-weight=700
+                            BookGrid(books=continuing, prefix="continue")
+                if e.name == "search"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" gap=8 padding="8px 16px"
+                      text "Search" role="heading" aria-level=1 flex=1
+                      input type="search" value=query input=searchFor placeholder=`Search ${nameOf(libraries, currentLibrary)}` aria-label="Search" testId="search"
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      column gap=28 padding="28px 32px 120px"
+                        LargeTitle(title="Search", subtitle=nameOf(libraries, currentLibrary))
+                        if query.trim() == ""
+                          EmptyState(symbol="symbol:search", title="Search Your Library", message="Find books by title, or authors by name.")
+                        else if failed(results)
+                          EmptyState(symbol="symbol:alert", title="Search Didn’t Work", message="The server didn’t answer. Try again.")
+                        else if results.query == query.trim() and results.books.length == 0 and results.authors.length == 0 and not pending(results)
+                          EmptyState(symbol="symbol:search", title=`No Results for “${query.trim()}”`, message="Check the spelling or try a new search.")
+                        else
+                          if results.authors.length > 0
+                            column gap=10
+                              text "Authors" font="-exact-title2" font-weight=700
+                              row gap=10 flex-wrap="wrap"
+                                for a in results.authors key=a.id
+                                  row gap=6 align-items="center" padding="6px 12px" border-radius=999 background-color="-exact-secondary-fill"
+                                    image "symbol:person" color="-exact-secondary-label"
+                                    text a.name testId=`author-${a.id}`
+                          if results.books.length > 0
+                            column gap=14
+                              text "Books" font="-exact-title2" font-weight=700
+                              BookGrid(books=results.books, prefix="result")
+                if e.name == "library"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" gap=8 padding="8px 16px"
+                      text nameOf(libraries, currentLibrary) role="heading" aria-level=1 flex=1
+                    scroll id=`scroll-${e.id}` flex=1 min-height=0
+                      column gap=28 padding="28px 32px 120px"
+                        LargeTitle(title=nameOf(libraries, currentLibrary), subtitle=(pending(books) ? "" : `${books.length} ${books.length == 1 ? "book" : "books"}`))
+                        if failed(books)
+                          EmptyState(symbol="symbol:alert", title="Can’t Load the Library", message=`Couldn’t reach ${session.server}.`)
+                            button press=signOut testId="failed-sign-out"
+                              text "Sign Out"
+                        else if books.length == 0 and not pending(books) and not pending(libraries)
+                          EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
+                        else
+                          BookGrid(books=books, prefix="book")
+                if e.name == "item"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" padding="8px 16px"
+                      button id="back" press=back aria-label="Back"
+                        image "symbol:back"
+                      text (detail.id == e.params.id ? detail.title : "") role="heading" aria-level=2 testId="detail-heading"
+                    if failed(detail)
+                      EmptyState(symbol="symbol:alert", title="Can’t Load This Book", message="The server didn’t answer.")
+                    else
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        if detail.id == e.params.id
+                          ItemDetail(item=detail, play=play(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id), seekChapter=seek)
+                if e.name == "player"
+                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                    header display="flex" align-items="center" padding="8px 16px"
+                      button id="back" press=back aria-label="Back"
+                        image "symbol:back"
+                      text "Now Playing" role="heading" aria-level=2 flex=1
+                      button press=stopAndClose aria-label="Stop" testId="stop"
+                        image "symbol:stop"
+                    if playing
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        column align-items="center" gap=18 padding="32px 32px 48px" max-width="36rem" margin="0 auto"
+                          image nowCover alt=nowTitle width=280 height=280 border-radius=14 object-fit="cover"
+                            box-shadow="0 12px 32px rgba(0, 0, 0, 0.25)" testId="player-cover"
+                          column align-items="center" gap=4 width="100%"
+                            text nowTitle font="-exact-title1" font-weight=700 text-align="center" testId="player-title"
+                            text nowAuthor font="-exact-title3" color="-exact-secondary-label" text-align="center" testId="player-author"
+                            text chapterTitle(chapters, chapter) color="-exact-secondary-label" text-align="center" testId="player-chapter"
+                          column gap=4 width="100%"
+                            input type="range" min=0 max=duration step=1 value=position change=scrubbed aria-label="Position" testId="scrubber"
+                            row justify-content="space-between"
+                              text clockText(position) font="-exact-caption1" font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="elapsed"
+                              text `-${clockText(max(0, duration - position))}` font="-exact-caption1" font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="remaining"
+                          row gap=14 align-items="center" justify-content="center" flex-wrap="wrap" padding="10px 16px"
+                            glassGroup=14
+                            button press=previousChapter buttonStyle="glass" aria-label="Previous Chapter" testId="prev-chapter"
+                              image "symbol:icon.backward-end-fill" font-size=20
+                            button press=skip(-30) buttonStyle="glass" aria-label="Back 30 Seconds" testId="back-30"
+                              image "symbol:skip-back-30" font-size=24
+                            button press=toggle buttonStyle="prominent-glass" aria-label=(paused ? "Play" : "Pause") testId="play-pause"
+                              image (paused ? "symbol:play-fill" : "symbol:pause-fill") font-size=34
+                            button press=skip(30) buttonStyle="glass" aria-label="Forward 30 Seconds" testId="forward-30"
+                              image "symbol:skip-forward-30" font-size=24
+                            button press=nextChapter buttonStyle="glass" aria-label="Next Chapter" disabled=(chapter + 1 >= chapters.length) testId="next-chapter"
+                              image "symbol:icon.forward-end-fill" font-size=20
+                          row gap=8 align-items="center" flex-wrap="wrap"
+                            text "Speed" color="-exact-secondary-label"
+                            select value=rate.toString() change=setRate aria-label="Speed" testId="speed"
+                              for r in ["0.75", "1", "1.25", "1.5", "1.75", "2"] key=r
+                                option `${r}×` value=r
+                            text (paused ? "Paused" : "Playing") font="-exact-footnote" color="-exact-secondary-label" testId="play-state"
+                          if chapters.length > 0
+                            column gap=0 width="100%" padding-top=8
+                              text "Chapters" font="-exact-title3" font-weight=700 padding-bottom=6
+                              for c in chapters key=c.id
+                                row press=seek(c.start) role="button" tabindex=0 aria-label=c.title gap=10 padding="9px 10px" border-radius=8
+                                  background-color=(c.id == chapter ? "-exact-secondary-fill" : "transparent") testId=`chapter-${c.id}`
+                                  text c.title flex=1 min-width=0 font-weight=(c.id == chapter ? 600 : 400)
+                                  text clockText(c.start) font-variant-numeric="tabular-nums" color="-exact-secondary-label"
+                    else
+                      EmptyState(symbol="symbol:play", title="Nothing Playing", message="Choose a book and press Play.")
+        // A mini player in glass over the page while a book plays and the player isn't shown.
+        if playing and top(nav).name != "player"
+          row position="absolute" bottom=16 left=16 right=16 max-width="40rem" margin="0 auto"
+            backgroundMaterial="glass" border-radius=18 padding="8px 12px" gap=12 align-items="center" testId="mini-player"
+            row press=openPlayer role="button" tabindex=0 aria-label=`Now Playing: ${nowTitle}` gap=10 align-items="center" flex=1 min-width=0 testId="mini-open"
+              image nowCover alt="" width=40 height=40 border-radius=6 object-fit="cover"
+              column flex=1 min-width=0 gap=1
+                text nowTitle font="-exact-subheadline" font-weight=600 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="mini-title"
+                text chapterTitle(chapters, chapter) font="-exact-footnote" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+            button press=skip(-30) buttonStyle="glass" aria-label="Back 30 Seconds" testId="mini-back-30"
+              image "symbol:skip-back-30"
+            button press=toggle buttonStyle="prominent-glass" aria-label=(paused ? "Play" : "Pause") testId="mini-play-pause"
+              image (paused ? "symbol:play-fill" : "symbol:pause-fill")
+            button press=skip(30) buttonStyle="glass" aria-label="Forward 30 Seconds" testId="mini-forward-30"
+              image "symbol:skip-forward-30"
+      // The sidebar (AppKit's source list on a Mac, a sidebar in a wide browser window).
+      row role="tablist" aria-label="Audio Nook" display=(showSignIn ? "none" : "flex")
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=showTab("home") testId="tab-home" flex=1
+          image "symbol:icon.headphones"
+          text "Listen Now"
+        button role="tab" aria-controls="panel-search" aria-selected=(nav.tab == "search") press=showTab("search") testId="tab-search" flex=1
+          image "symbol:search"
+          text "Search"
+        for l in libraries key=l.id
+          button role="tab" aria-controls=`panel-library-${l.id}` aria-selected=(nav.tab == "library" and currentLibrary == l.id)
+            press=showLibrary(l.id) testId=`tab-library-${l.id}` flex=1
+            image "symbol:icon.books-vertical"
+            text l.name
+      // The one player, beside the screens so it keeps playing while you browse.
+      if playing and not showSignIn and urlOf(media, track) != ""
+        audio urlOf(media, track) id="player-audio" paused=paused playbackRate=rate
+          timeupdate=ticked loadedmetadata=loaded error=mediaFailed seeked=seekDone ended=trackEnded pause=hostPaused playing=hostPlaying
+          metadata=MediaMetadata(title=nowTitle, artist=nowAuthor, album=chapterTitle(chapters, chapter), artwork=nowCover)
+          seekbackwardOffset=30 seekforwardOffset=30 seekbackward=skip(-30) seekforward=skip(30)
+          previoustrack=previousChapter nexttrack=nextChapter
+          width=0 height=0 position="absolute" testId="player-audio"
+
+component SignIn
+  props
+    server: string
+    username: string
+    password: string
+    error: string
+    busy: bool
+    editServer: action
+    editUsername: action
+    editPassword: action
+    signIn: action
+  view
+    column width="100%" height="100%" display="flex" flex-direction="column"
+      header display="flex" align-items="center" padding="8px 16px"
+        text "Audio Nook" role="heading" aria-level=1
+      scroll flex=1 min-height=0
+        column align-items="center" gap=6 padding="48px 24px 8px"
+          image "symbol:icon.headphones" font-size=44 color="AccentColor"
+          text "Sign In to Audiobookshelf" font="-exact-title1" font-weight=700 text-align="center"
+          text "Enter your server’s address and your account." color="-exact-secondary-label" text-align="center"
+        list appearance="auto" listStyle="inset-grouped" max-width="30rem" width="100%" margin="0 auto" testId="sign-in"
+          section
+            header
+              text "Server"
+            row
+              input value=server input=editServer placeholder="http://192.168.1.10:13378" aria-label="Server Address"
+                autocapitalize="none" inputmode="url" flex=1 min-width=0 testId="server"
+          section
+            header
+              text "Account"
+            row
+              input value=username input=editUsername placeholder="Username" aria-label="Username" autocapitalize="none"
+                autocomplete="username" flex=1 min-width=0 testId="username"
+            row
+              input type="password" value=password input=editPassword submit=signIn placeholder="Password" aria-label="Password"
+                autocomplete="current-password" flex=1 min-width=0 testId="password"
+            footer
+              text (error != "" and not busy ? error : busy ? "Signing in…" : "") color=(error != "" and not busy ? "-exact-system-red" : "-exact-secondary-label") testId="sign-in-message"
+          section
+            button press=signIn disabled=(busy or server.trim() == "" or username.trim() == "") testId="sign-in-button"
+              text "Sign In"
+
+// A page's large title, as Books and Music set it in the page under the toolbar.
+component LargeTitle
+  props
+    title: string
+    subtitle: string
+  view
+    column gap=2
+      text title font="-exact-large-title" font-weight=700 testId="page-title"
+      text subtitle color="-exact-secondary-label"
+
+// Covers in a grid that fills the width, as Books' library does.
+component BookGrid
+  props
+    books: Book[]
+    prefix: string
+  view
+    column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
+      for b in books key=b.id
+        BookCard(book=b, prefix=prefix)
+
+component BookCard
+  props
+    book: Book
+    prefix: string
+  view
+    link href=path("item", book.id) aria-label=`${book.title}, ${book.author}` testId=`${prefix}-${book.id}`
+      column gap=4 min-width=0
+        image book.cover alt="" width="100%" aspect-ratio=1 border-radius=8 object-fit="cover"
+          background-color="-exact-secondary-fill" box-shadow="0 4px 12px rgba(0, 0, 0, 0.18)"
+        text book.title font-weight=600 padding-top=6 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-title-${book.id}`
+        text book.author font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+        row gap=6 align-items="center"
+          if book.progress > 0 and book.progress < 1
+            progress value=book.progress max=1 width="3rem"
+          text progressText(book.progress) font="-exact-caption1" color="-exact-secondary-label" testId=`${prefix}-progress-${book.id}`
+
+component ItemDetail
+  props
+    item: Detail
+    play: action
+    starting: bool
+    isCurrent: bool
+    seekChapter: action
+  view
+    column gap=28 padding="32px 32px 120px" max-width="56rem"
+      row gap=32 align-items="flex-end" flex-wrap="wrap"
+        image item.cover alt=item.title width=220 height=220 border-radius=10 object-fit="cover"
+          box-shadow="0 10px 28px rgba(0, 0, 0, 0.22)" testId="detail-cover"
+        column gap=6 flex=1 flex-basis="16rem" min-width=0
+          text item.title font="-exact-large-title" font-weight=700 testId="detail-title"
+          text `By ${item.author}` font="-exact-title3" testId="detail-author"
+          text (item.narrator == "" ? "" : `Narrated by ${item.narrator}`) color="-exact-secondary-label" testId="detail-narrator"
+          text `${lengthText(item.duration)} · ${item.chapters.length} ${item.chapters.length == 1 ? "chapter" : "chapters"} · ${progressText(item.progress)}` color="-exact-secondary-label" testId="detail-meta"
+          row padding-top=12 flex-wrap="wrap"
+            button press=play disabled=starting buttonStyle="filled" testId="play"
+              image "symbol:play-fill"
+              text (starting ? "Starting…" : isCurrent ? "Resume" : item.currentTime > 0 ? "Continue" : "Play")
+      column gap=8
+        text "About" font="-exact-title3" font-weight=700
+        text item.description line-height=1.45 testId="detail-description"
+      column gap=0
+        text "Chapters" font="-exact-title3" font-weight=700 padding-bottom=6
+        for c in item.chapters key=c.id
+          column
+            row gap=8 padding="9px 0" testId=`detail-chapter-${c.id}`
+              text `${c.id + 1}` color="-exact-secondary-label" font-variant-numeric="tabular-nums" width="2rem"
+              text c.title flex=1 min-width=0
+              text clockText(c.end - c.start) font-variant-numeric="tabular-nums" color="-exact-secondary-label"
+            hr

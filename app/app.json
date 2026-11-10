@@ -1,0 +1,27 @@
+{
+  "$schema": "../../exact/scripts/app.schema.json",
+  "name": "Audio Nook",
+  "short_name": "Audio Nook",
+  "id": "com.audionook.app",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "com.audionook.app",
+    "name": "Audio Nook"
+  },
+  "host": {
+    "web": {},
+    "macos": {
+      "appTransportSecurity": { "allowsArbitraryLoads": true }
+    }
+  },
+  "commands": {
+    "server": ["bun", "mock/server.ts"]
+  },
+  "server": { "database": false },
+  "deploy": {
+    "store": {
+      "web": "0"
+    }
+  }
+}

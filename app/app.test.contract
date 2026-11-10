@@ -1,0 +1,326 @@
+// Audio Nook against the mock Audiobookshelf server (mock/server.ts, which `test` starts at
+// app.ts's MOCK_SERVER). Its accounts are reader / listen (ABS 3.x: short-lived access tokens and
+// a rotating refresh token) and legacy / listen (a pre-2.26 server's one token). Dune starts 45 s
+// into its 120 s; the server is shared by every test in a run, so a test that needs that resets it.
+
+test "a wrong password is refused and keeps the form"
+  clock data
+  expect tree has "sign-in"
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "nope"
+  tap "sign-in-button"
+  clock data
+  expect text "sign-in-message" == "That username and password didn’t work."
+  expect tree has "sign-in"
+  expect text "server" == "http://127.0.0.1:13378"
+
+test "sign in lists the library and continue listening, a relaunch stays signed in, sign out returns to the form"
+  clock data
+  type "server" "127.0.0.1:13378/"
+  type "username" "reader"
+  type "password" "listen"
+  type "password" key "Enter"
+  clock data
+  clock settle
+  expect tree missing "sign-in"
+  expect state session.server == "http://127.0.0.1:13378"
+  expect state libraries.0 .name == "Audiobooks"
+  expect state nav.tab == "home"
+  expect text "continue-title-li_dune" == "Dune"
+  expect text "continue-progress-li_dune" == "38% listened"
+  expect tree missing "continue-li_hobbit"
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect state nav.tab == "library"
+  expect text "book-title-li_dune" == "Dune"
+  expect text "book-title-li_hobbit" == "The Hobbit"
+  expect text "book-title-li_martian" == "The Martian"
+  expect text "book-progress-li_dune" == "38% listened"
+  expect text "book-progress-li_hobbit" == "Not started"
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect state currentLibrary == "lib_kids"
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+  expect tree missing "book-li_dune"
+  reload
+  clock data
+  expect tree missing "sign-in"
+  expect state currentLibrary == "lib_kids"
+  tap "tab-home"
+  clock settle
+  tap "sign-out"
+  clock data
+  clock settle
+  expect tree has "sign-in"
+  expect text "server" == "http://127.0.0.1:13378"
+
+test "an item's detail shows its author, narrator, description, length and chapters"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  expect text "detail-title" == "Dune"
+  expect text "detail-author" == "By Frank Herbert"
+  expect text "detail-narrator" == "Narrated by Scott Brick"
+  expect text "detail-description" == "A desert planet, a noble family, and the spice that everyone wants."
+  expect text "detail-meta" == "2m · 3 chapters · 38% listened"
+  expect tree has "detail-chapter-2"
+  expect text "play" == "Continue"
+
+test "play starts a session at the saved position, pauses, skips, changes chapter and speed, syncs and closes"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect state sessionId == "ps_1"
+  expect text "player-title" == "Dune"
+  expect text "player-chapter" == "Book Two: Muad’Dib"
+  expect state paused == false
+  expect text "play-state" == "Playing"
+  tap "play-pause"
+  expect state paused == true
+  expect text "play-state" == "Paused"
+  expect text "elapsed" == "0:45"
+  tap "forward-30"
+  expect text "elapsed" == "1:15"
+  expect state track == 1
+  tap "back-30"
+  expect text "elapsed" == "0:45"
+  expect state track == 0
+  tap "next-chapter"
+  expect text "player-chapter" == "Book Three: The Prophet"
+  expect text "elapsed" == "1:20"
+  tap "prev-chapter"
+  expect text "player-chapter" == "Book Two: Muad’Dib"
+  expect text "elapsed" == "0:40"
+  tap "chapter-0"
+  expect text "player-chapter" == "Book One: Dune"
+  expect text "elapsed" == "0:00"
+  type "speed" "1.5"
+  expect state rate == 1.5
+  tap "play-pause"
+  expect state paused == false
+  expect text "play-state" == "Playing"
+  request GET "/__mock/sessions?syncs=1" as reader
+  tap "stop"
+  clock data
+  clock settle
+  expect state sessionId == ""
+  request GET "/__mock/sessions?closed=1" as reader
+
+test "a legacy server's single token signs in and lists the library"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "legacy"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect tree missing "sign-in"
+  expect text "book-title-li_dune" == "Dune"
+  tap "book-li_hobbit"
+  clock data
+  clock settle
+  expect text "detail-title" == "The Hobbit"
+
+test "a typed http:/ address is mended; an expired access token is refreshed without asking; sign-out spends the refresh token"
+  clock data
+  type "server" "http:/127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect state session.server == "http://127.0.0.1:13378"
+  expect text "book-title-li_dune" == "Dune"
+  request POST "/__mock/expire" as reader
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect tree missing "sign-in"
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+  request GET "/__mock/auth?refreshes=1" as reader
+  request POST "/__mock/expire" as reader
+  tap "book-li_gruffalo"
+  clock data
+  clock settle
+  expect text "detail-title" == "The Gruffalo"
+  request GET "/__mock/auth?refreshes=2" as reader
+  back
+  clock settle
+  reload
+  clock data
+  clock settle
+  expect tree missing "sign-in"
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+  tap "tab-home"
+  clock settle
+  tap "sign-out"
+  clock data
+  clock settle
+  expect tree has "sign-in"
+  request GET "/__mock/auth?logoutsWithRefreshToken=1" as reader
+
+test "a refresh the server refuses returns to the sign-in form, and signing in again resumes"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect text "book-title-li_dune" == "Dune"
+  request POST "/__mock/revoke" as reader
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect tree has "sign-in"
+  expect text "sign-in-message" == "Your session has ended. Sign in again."
+  expect text "server" == "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect tree missing "sign-in"
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+
+test "audio whose access token expired renews it and loads again"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  tap "play-pause"
+  expect state paused == true
+  request POST "/__mock/expire" as reader
+  tap "forward-30"
+  expect state track == 1
+  clock until state tokenGen == 1 within 15000
+  clock data
+  expect state track == 1
+  expect text "elapsed" == "1:15"
+  expect tree missing "sign-in"
+
+test "search finds books by title and authors by name in the chosen library"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-search"
+  clock settle
+  expect state nav.tab == "search"
+  type "search" "the"
+  clock data
+  expect text "result-title-li_hobbit" == "The Hobbit"
+  expect text "result-title-li_martian" == "The Martian"
+  expect tree missing "result-li_dune"
+  expect tree missing "result-li_gruffalo"
+  type "search" "herbert"
+  clock data
+  expect text "author-au_0" == "Frank Herbert"
+  expect state results.books == []
+  type "search" "zzz"
+  clock data
+  expect state results.authors == []
+  expect tree missing "author-au_0"
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  tap "tab-search"
+  clock settle
+  type "search" "the"
+  clock data
+  expect text "result-title-li_gruffalo" == "The Gruffalo"
+  expect tree missing "result-li_hobbit"
+  tap "result-li_gruffalo"
+  clock data
+  clock settle
+  expect text "detail-title" == "The Gruffalo"
+
+test "the mini player keeps playing across the sidebar and opens the player"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "continue-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect tree missing "mini-player"
+  tap "play-pause"
+  expect state paused == true
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  expect text "mini-title" == "Dune"
+  tap "mini-play-pause"
+  expect state paused == false
+  tap "mini-play-pause"
+  expect state paused == true
+  tap "mini-forward-30"
+  expect state track == 1
+  tap "mini-open"
+  clock settle
+  expect text "player-title" == "Dune"
+  expect tree missing "mini-player"
