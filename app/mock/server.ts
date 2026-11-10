@@ -133,7 +133,7 @@ function progressOf(id: string) {
   const p = progress.get(id);
   const b = BOOKS.find((x) => x.id === id)!;
   const duration = b.tracks.reduce((s, t) => s + t.duration, 0);
-  return p ? { id: `mp_${id}`, libraryItemId: id, duration, progress: p.progress, currentTime: p.currentTime, isFinished: false, lastUpdate: p.lastUpdate } : null;
+  return p ? { id: `mp_${id}`, libraryItemId: id, duration, progress: p.progress, currentTime: p.currentTime, isFinished: p.progress >= 1, lastUpdate: p.lastUpdate } : null;
 }
 
 Bun.serve({
@@ -243,8 +243,12 @@ async function route(req: Request): Promise<Response> {
     }
     let pm = path.match(/^\/api\/me\/progress\/([^/]+)$/);
     if (pm && method === 'PATCH') {
-      const it = (await req.json().catch(() => ({}))) as { currentTime?: number; progress?: number };
-      progress.set(pm[1], { currentTime: it.currentTime ?? 0, progress: it.progress ?? 0, lastUpdate: Date.now() });
+      // createUpdateMediaProgress: fields left out keep their values; isFinished finishes the book.
+      const it = (await req.json().catch(() => ({}))) as { currentTime?: number; progress?: number; isFinished?: boolean };
+      const was = progress.get(pm[1]);
+      const finished = it.isFinished ?? (was ? was.progress >= 1 : false);
+      const currentTime = it.currentTime ?? was?.currentTime ?? 0;
+      progress.set(pm[1], { currentTime: finished && currentTime <= 0 ? 1 : currentTime, progress: finished ? 1 : it.progress ?? (was && was.progress < 1 ? was.progress : 0), lastUpdate: Date.now() });
       return new Response('OK');
     }
     if (pm) {

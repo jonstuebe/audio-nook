@@ -57,6 +57,10 @@ shape DownloadStep
 shape Pending
   count: number
 
+shape SeriesRef
+  id: string
+  name: string
+
 shape Detail
   id: string
   title: string
@@ -111,6 +115,8 @@ component App
   state sortKey = "title" persist
   state filterKey = "all" persist
   state pages = 1
+  // The book a right-click opened the menu on.
+  state aimed: option<Book> = none
   // The player: which track plays, where in it, and where to go once it has loaded.
   state paused = true
   state track = 0
@@ -168,8 +174,14 @@ component App
   mutation dlRemoved as shape Reply refreshes downloads
   mutation flushed as shape Pending refreshes pending, home, page
   derive activeDownload = match first(downloads.filter(d => d.state == "downloading")) { case some(d) => d.id, case none => "" }
-  derive keptBooks = downloads.map(d => Book(id=d.id, title=d.title, author=d.author, cover=d.cover, duration=d.duration, progress=d.listened))
+  derive keptBooks = downloads.map(d => Book(id=d.id, title=d.title, author=d.author, cover=d.cover, duration=d.duration, progress=d.listened, series=""))
   mutation renewed as shape Reply then afterRenew
+  // A book's context menu: finished or not, and its series.
+  mutation finishedSet as shape Reply refreshes home, page, detail, seriesPage, authorPage, collectionPage, results
+  mutation seriesFound as shape SeriesRef then afterSeriesFound
+  derive aimedId = match aimed { case some(b) => b.id, case none => "" }
+  derive aimedFinished = match aimed { case some(b) => b.progress >= 1, case none => false }
+  derive aimedSeries = match aimed { case some(b) => b.series, case none => "" }
 
   derive loginError = match loggedIn { case some(r) => r.error, case none => "" }
   derive playing = match started { case some(s) => s.id != "", case none => false }
@@ -229,6 +241,34 @@ component App
     nav = select(nav, name)
   action searchFor(v: string)
     query = v
+  action openBookMenu(b: Book)
+    aimed = some(b)
+  action menuPlay
+    if aimedId != ""
+      play(aimedId)
+  action menuDownload
+    if aimedId != ""
+      download(aimedId)
+  action menuRemoveDownload
+    if aimedId != ""
+      removeKept(aimedId)
+  action menuFinish
+    if aimedId != ""
+      send finishedSet = markFinished(aimedId, not aimedFinished)
+  action menuShowSeries
+    if aimedId != ""
+      send seriesFound = findSeries(aimedId)
+  action afterSeriesFound
+    match seriesFound
+      case some(found)
+        if found.id != ""
+          nav = push(nav, path("series", found.id))
+      case none
+        paused = paused
+  // ⌘F: the Search page, its field focused.
+  action findInLibrary
+    nav = select(nav, "search")
+    focus("search-field")
   action showView(v: string)
     libraryView = v
   action setSort(k: string)
@@ -432,12 +472,12 @@ component App
                               text "Browse the Library"
                         else
                           for sh in home.shelves key=sh.id
-                            ShelfRow(shelf=sh, downloads=downloads)
+                            ShelfRow(shelf=sh, downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "search"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
                       text "Search" role="heading" aria-level=1 flex=1
-                      input type="search" value=query input=searchFor placeholder=`Search ${nameOf(libraries, currentLibrary)}` aria-label="Search" testId="search"
+                      input type="search" id="search-field" value=query input=searchFor placeholder=`Search ${nameOf(libraries, currentLibrary)}` aria-label="Search" testId="search"
                     scroll id=`scroll-${e.id}` flex=1 min-height=0
                       column gap=28 padding="28px 32px 120px"
                         LargeTitle(title="Search", subtitle=nameOf(libraries, currentLibrary))
@@ -459,7 +499,7 @@ component App
                           if results.books.length > 0
                             column gap=14
                               text "Books" font="-exact-title2" font-weight=700
-                              BookGrid(books=results.books, prefix="result", downloads=downloads)
+                              BookGrid(books=results.books, prefix="result", downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "library"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     // The toolbar: the library's title, its four views as segments, and for books the
@@ -534,9 +574,9 @@ component App
                             EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
                           else
                             if layout == "list"
-                              BookList(books=books, prefix="book", downloads=downloads)
+                              BookList(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
                             else
-                              BookGrid(books=books, prefix="book", downloads=downloads)
+                              BookGrid(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
                             // More as the end comes into view; the button for a reader who would rather press.
                             if books.length < page.total
                               view intersect=loadMore height=1 testId="more-marker"
@@ -577,7 +617,7 @@ component App
                               SeriesGrid(series=authorPage.series, prefix="authorseries")
                           column gap=14
                             text "Books" font="-exact-title2" font-weight=700
-                            BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads)
+                            BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "series"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -593,7 +633,7 @@ component App
                       else
                         column gap=28 padding="28px 32px 120px"
                           LargeTitle(title=seriesPage.name, subtitle=booksText(seriesPage.entries.length))
-                          SeriesBooks(entries=seriesPage.entries, downloads=downloads)
+                          SeriesBooks(entries=seriesPage.entries, downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "collection"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -609,7 +649,7 @@ component App
                       else
                         column gap=28 padding="28px 32px 120px"
                           LargeTitle(title=collectionPage.name, subtitle=(collectionPage.description == "" ? booksText(collectionPage.books.length) : `${booksText(collectionPage.books.length)} · ${collectionPage.description}`))
-                          BookGrid(books=collectionPage.books, prefix="collectionbook", downloads=downloads)
+                          BookGrid(books=collectionPage.books, prefix="collectionbook", downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "downloads"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -620,7 +660,7 @@ component App
                         if downloads.length == 0 and not pending(downloads)
                           EmptyState(symbol="symbol:download", title="No Downloads", message="Download a book from its page to listen without a connection.")
                         else
-                          BookGrid(books=keptBooks, prefix="download", downloads=downloads)
+                          BookGrid(books=keptBooks, prefix="download", downloads=downloads, menu=openBookMenu, playNow=play)
                 if e.name == "item"
                   column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
@@ -706,18 +746,18 @@ component App
               image "symbol:icon.mini-player"
       // The sidebar (AppKit's source list on a Mac, a sidebar in a wide browser window).
       row role="tablist" aria-label="Audio Nook" display=(showSignIn ? "none" : "flex")
-        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=showTab("home") testId="tab-home" flex=1
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=showTab("home") aria-keyshortcuts="Meta+1" testId="tab-home" flex=1
           image "symbol:icon.headphones"
           text "Listen Now"
-        button role="tab" aria-controls="panel-search" aria-selected=(nav.tab == "search") press=showTab("search") testId="tab-search" flex=1
+        button role="tab" aria-controls="panel-search" aria-selected=(nav.tab == "search") press=showTab("search") aria-keyshortcuts="Meta+2" testId="tab-search" flex=1
           image "symbol:search"
           text "Search"
-        button role="tab" aria-controls="panel-downloads" aria-selected=(nav.tab == "downloads") press=showTab("downloads") testId="tab-downloads" flex=1
+        button role="tab" aria-controls="panel-downloads" aria-selected=(nav.tab == "downloads") press=showTab("downloads") aria-keyshortcuts="Meta+3" testId="tab-downloads" flex=1
           image "symbol:download"
           text "Downloads"
-        for l in libraries key=l.id
+        for l, i in libraries key=l.id
           button role="tab" aria-controls=`panel-library-${l.id}` aria-selected=(nav.tab == "library" and currentLibrary == l.id)
-            press=showLibrary(l.id) testId=`tab-library-${l.id}` flex=1
+            press=showLibrary(l.id) aria-keyshortcuts=(i < 6 ? `Meta+${i + 4}` : "") testId=`tab-library-${l.id}` flex=1
             image "symbol:icon.books-vertical"
             text l.name
       // The one player, beside the screens so it keeps playing while you browse.
@@ -740,6 +780,45 @@ component App
         button press=toggleMiniWindow -exact-menu="window" aria-keyshortcuts="Alt+Meta+M" disabled=(not playing)
           aria-label=(miniWindow ? "Close Mini Player" : "Mini Player") testId="menu-mini-player"
           text (miniWindow ? "Close Mini Player" : "Mini Player")
+        button press=toggle -exact-menu="view dock" disabled=(not playing) aria-label=(paused ? "Play" : "Pause") testId="menu-play-pause"
+          text (paused ? "Play" : "Pause")
+        button press=skip(-30) -exact-menu="view dock" aria-keyshortcuts="Meta+ArrowLeft" disabled=(not playing) aria-label="Skip Back 30 Seconds" testId="menu-back-30"
+          text "Skip Back 30 Seconds"
+        button press=skip(30) -exact-menu="view dock" aria-keyshortcuts="Meta+ArrowRight" disabled=(not playing) aria-label="Skip Forward 30 Seconds" testId="menu-forward-30"
+          text "Skip Forward 30 Seconds"
+        button press=previousChapter -exact-menu="view" aria-keyshortcuts="Alt+Meta+ArrowLeft" disabled=(not playing) aria-label="Previous Chapter" testId="menu-previous-chapter"
+          text "Previous Chapter"
+        button press=nextChapter -exact-menu="view" aria-keyshortcuts="Alt+Meta+ArrowRight" disabled=(not playing or chapter + 1 >= chapters.length) aria-label="Next Chapter" testId="menu-next-chapter"
+          text "Next Chapter"
+        button press=findInLibrary aria-keyshortcuts="Meta+F" aria-label="Find in Library" testId="menu-find"
+          text "Find in Library"
+        // Space plays and pauses, as in Music, except on the Search page, where it types.
+        if playing and nav.tab != "search"
+          button press=toggle -exact-menu="none" aria-keyshortcuts="Space" aria-label="Play or Pause" testId="key-space"
+            text "Play or Pause"
+      // A book's menu, on a right-click of its cover or row.
+      column id="book-menu" popover="auto" role="menu" aria-label="Book"
+        button press=menuPlay popovertarget="book-menu" popovertargetaction="hide" testId="menu-book-play"
+          image "symbol:play-fill"
+          text "Play"
+        if dlState(downloads, aimedId) == "done"
+          button press=menuRemoveDownload popovertarget="book-menu" popovertargetaction="hide" testId="menu-book-download"
+            image "symbol:delete"
+            text "Remove Download"
+        else if dlState(downloads, aimedId) == "downloading"
+          button press=menuRemoveDownload popovertarget="book-menu" popovertargetaction="hide" testId="menu-book-download"
+            image "symbol:close"
+            text "Cancel Download"
+        else
+          button press=menuDownload popovertarget="book-menu" popovertargetaction="hide" testId="menu-book-download"
+            image "symbol:download"
+            text "Download"
+        button press=menuFinish popovertarget="book-menu" popovertargetaction="hide" testId="menu-book-finish"
+          image "symbol:checkmark"
+          text (aimedFinished ? "Mark as Not Finished" : "Mark as Finished")
+        button press=menuShowSeries disabled=(aimedSeries == "") popovertarget="book-menu" popovertargetaction="hide" testId="menu-book-series"
+          image "symbol:layers"
+          text (aimedSeries == "" ? "Show in Series" : `Show in ${aimedSeries}`)
 
 component SignIn
   props

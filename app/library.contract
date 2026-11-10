@@ -9,6 +9,7 @@ shape Book
   cover: string
   duration: number
   progress: number
+  series: string
 
 // One page of a library: as many books as have been asked for, of `total`.
 shape BookPage
@@ -118,11 +119,15 @@ component BookGrid
     books: Book[]
     prefix: string
     downloads: DownloadInfo[]
+    menu: action
+    playNow: action
   view
     column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
       for b in books key=b.id
-        BookCard(book=b, prefix=prefix, caption="", dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id))
+        BookCard(book=b, prefix=prefix, caption="", dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id), menu=menu, playNow=playNow)
 
+// A cover, as Books draws one: the art at its own shape on the shelf's floor, a placeholder until
+// it loads, lifted under the pointer with a Play button, pressed in, and its menu on a right-click.
 component BookCard
   props
     book: Book
@@ -130,13 +135,34 @@ component BookCard
     caption: string
     dlState: string
     dlProgress: number
+    menu: action
+    playNow: action
+  state hovered = false
+  state loaded = false
+  action pointer(over: bool)
+    hovered = over
+  action coverLoaded
+    loaded = true
   view
-    link href=path("item", book.id) aria-label=`${book.title}, ${book.author}` testId=`${prefix}-${book.id}`
+    // The press scale is the host's own press of a link, which Apple draws (the web only by touch).
+    link href=path("item", book.id) aria-label=`${book.title}, ${book.author}` hover=pointer
+      contextmenu=menu(book) contextPopover="book-menu" testId=`${prefix}-${book.id}`
+      :active
+        -exact-press-scale = 0.97
       column gap=4 min-width=0
         if caption != ""
           text caption font="-exact-caption1" font-weight=600 color="-exact-secondary-label" testId=`${prefix}-caption-${book.id}`
-        image book.cover alt="" width="100%" aspect-ratio=1 border-radius=8 object-fit="cover"
-          background-color="-exact-secondary-fill" box-shadow="0 4px 12px rgba(0, 0, 0, 0.18)"
+        column position="relative" width="100%" aspect-ratio=1 justify-content="flex-end" align-items="center"
+          if not loaded
+            column position="absolute" inset=0 border-radius=8 background-color="-exact-secondary-fill"
+              align-items="center" justify-content="center" testId=`${prefix}-placeholder-${book.id}`
+              image "symbol:book" font-size=30 color="-exact-tertiary-label"
+          image book.cover alt="" max-width="100%" max-height="100%" border-radius=6 load=coverLoaded
+            box-shadow=(hovered ? "0 10px 24px rgba(0, 0, 0, 0.28)" : "0 4px 12px rgba(0, 0, 0, 0.18)")
+          if hovered
+            button press=playNow(book.id) buttonStyle="prominent-glass" position="absolute" left=8 bottom=8
+              aria-label=`Play ${book.title}` testId=`${prefix}-play-${book.id}`
+              image "symbol:play-fill"
         text book.title font-weight=600 padding-top=6 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId=`${prefix}-title-${book.id}`
         text book.author font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
         row gap=6 align-items="center"
@@ -159,11 +185,13 @@ component BookList
     books: Book[]
     prefix: string
     downloads: DownloadInfo[]
+    menu: action
+    playNow: action
   view
     column testId=`${prefix}-list`
       for b in books key=b.id
         column
-          link href=path("item", b.id) aria-label=`${b.title}, ${b.author}` testId=`${prefix}-${b.id}`
+          link href=path("item", b.id) aria-label=`${b.title}, ${b.author}` contextmenu=menu(b) contextPopover="book-menu" testId=`${prefix}-${b.id}`
             row gap=14 align-items="center" padding="8px 4px"
               image b.cover alt="" width=44 height=44 border-radius=5 object-fit="cover" background-color="-exact-secondary-fill"
               column flex=1 min-width=0 gap=1
@@ -180,10 +208,12 @@ component SeriesBooks
   props
     entries: SeriesEntry[]
     downloads: DownloadInfo[]
+    menu: action
+    playNow: action
   view
     column display="grid" grid-template-columns="repeat(auto-fill, minmax(9.5rem, 1fr))" column-gap=24 row-gap=28
       for e in entries key=e.book.id
-        BookCard(book=e.book, prefix="series", caption=`Book ${e.sequence}`, dlState=dlState(downloads, e.book.id), dlProgress=dlProgress(downloads, e.book.id))
+        BookCard(book=e.book, prefix="series", caption=`Book ${e.sequence}`, dlState=dlState(downloads, e.book.id), dlProgress=dlProgress(downloads, e.book.id), menu=menu, playNow=playNow)
 
 // Up to three covers fanned behind one another, as Books shows a series or a collection.
 component CoverStack
@@ -277,6 +307,8 @@ component ShelfRow
   props
     shelf: Shelf
     downloads: DownloadInfo[]
+    menu: action
+    playNow: action
   view
     column gap=12 testId=`shelf-${shelf.id}`
       text shelf.label font="-exact-title2" font-weight=700 testId=`shelf-title-${shelf.id}`
@@ -285,7 +317,7 @@ component ShelfRow
           if shelf.kind == "book"
             for b in shelf.books key=b.id
               column width="9.5rem" flex-shrink=0
-                BookCard(book=b, prefix=shelfPrefix(shelf.id), caption="", dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id))
+                BookCard(book=b, prefix=shelfPrefix(shelf.id), caption="", dlState=dlState(downloads, b.id), dlProgress=dlProgress(downloads, b.id), menu=menu, playNow=playNow)
           else if shelf.kind == "series"
             for s in shelf.series key=s.id
               column width="9.5rem" flex-shrink=0

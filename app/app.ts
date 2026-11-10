@@ -194,12 +194,15 @@ function book(store: Store, i: Item, progress: Map<string, Progress>): Book {
   return {
     id: i.id,
     title: str(m.title) || 'Untitled',
-    author: str(m.authorName),
+    author: str(m.authorName) || names(m.authors),
     cover: coverUrl(store, i.id),
     duration: num(i.media.duration),
     progress: p ? (p.isFinished ? 1 : num(p.progress)) : 0,
+    // A minified item names its series as `seriesName` ("Dune Chronicles #1"), an expanded one as `series`.
+    series: str(m.seriesName).replace(/ #[^#]*$/, '') || (Array.isArray(m.series) ? str(m.series[0]?.name) : ''),
   };
 }
+const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : str(x?.name))).filter(Boolean).join(', ') : '');
 
 const chapters = (raw: unknown): Chapter[] =>
   Array.isArray(raw) ? raw.map((c, i) => ({ id: i, title: str(c.title) || `Chapter ${i + 1}`, start: num(c.start), end: num(c.end) })) : [];
@@ -311,7 +314,7 @@ const sources: Sources = {
     if (!server || !libraryId) return { total: 0, books: [] };
     if (filter === 'downloaded') {
       const kept = Object.values(await offline.index(storage)).filter((e) => e.libraryId === libraryId && e.state === 'done');
-      const books = kept.map((e) => ({ id: e.id, title: e.title, author: e.author, cover: e.cover, duration: e.duration, progress: e.duration ? Math.min(1, e.position / e.duration) : 0 }));
+      const books = kept.map((e) => ({ id: e.id, title: e.title, author: e.author, cover: e.cover, duration: e.duration, progress: e.duration ? Math.min(1, e.position / e.duration) : 0, series: '' }));
       return { total: books.length, books: sortLocally(books, sort) };
     }
     const [key, desc] = SORTS[sort] ?? SORTS.title;
@@ -344,6 +347,22 @@ const sources: Sources = {
           authors: sh.type === 'authors' ? (sh.entities as AuthorBody[]).map((a) => authorCard(store, a)) : [],
         })),
     };
+  },
+
+  // A book's context menu. Mark as Finished: PATCH /api/me/progress/:id with `isFinished`
+  // (MeController.createUpdateMediaProgress). Show in Series: the expanded item's first series.
+  markFinished: async ([id, finished], store): Promise<Reply> => {
+    try {
+      await api(store, `/api/me/progress/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(finished ? { isFinished: true } : { isFinished: false, currentTime: 0, progress: 0 }) });
+      return ok;
+    } catch (e) {
+      return refused((e as Error).message);
+    }
+  },
+  findSeries: async ([id], store) => {
+    const i = (await api(store, `/api/items/${encodeURIComponent(id)}?expanded=1`)) as Item;
+    const series = (i.media.metadata as { series?: { id?: string; name?: string }[] }).series;
+    return { id: str(series?.[0]?.id), name: str(series?.[0]?.name) };
   },
 
   // GET /api/libraries/:id/authors: `{ authors: [Author + numBooks] }` without paging.

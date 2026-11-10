@@ -17,6 +17,8 @@ type Book = {
   id: string; libraryId: string; title: string; author: string; narrator: string; description: string;
   addedAt: number; color: [number, number, number];
   authorId: string; series?: { id: string; name: string; sequence: string };
+  // A cover's pixel size: most are square, as audiobook covers are; The Martian's is a print cover.
+  coverSize?: [number, number];
   tracks: { title: string; duration: number }[];
   chapters: { id: number; start: number; end: number; title: string }[];
 };
@@ -43,7 +45,7 @@ export const BOOKS: Book[] = [
   {
     id: 'li_martian', libraryId: 'lib_books', title: 'The Martian', author: 'Andy Weir', narrator: 'R. C. Bray',
     description: 'Stranded on Mars, an astronaut has to science his way home.', addedAt: 1_692_000_000_000,
-    authorId: 'au_weir',
+    authorId: 'au_weir', coverSize: [200, 300],
     color: [178, 72, 56],
     tracks: [{ title: 'The Martian', duration: 120 }],
     chapters: threeChapters(['Sol 6', 'Sol 7', 'Sol 10']),
@@ -109,15 +111,15 @@ function chunk(type: string, data: Uint8Array) {
   return out;
 }
 const covers = new Map<string, Uint8Array>();
-export function coverPng(b: { id: string; color: [number, number, number] }): Uint8Array {
+export function coverPng(b: { id: string; color: [number, number, number]; coverSize?: [number, number] }): Uint8Array {
   const hit = covers.get(b.id);
   if (hit) return hit;
-  const w = 200, h = 200, raw = new Uint8Array(h * (1 + w * 3));
+  const [w, h] = b.coverSize ?? [200, 200], raw = new Uint8Array(h * (1 + w * 3));
   for (let y = 0; y < h; y++) {
     raw[y * (1 + w * 3)] = 0;
     for (let x = 0; x < w; x++) {
       // A lighter band across the middle, so a cover reads as a cover.
-      const band = y > 80 && y < 120 ? 50 : 0;
+      const band = y > h * 0.4 && y < h * 0.6 ? 50 : 0;
       for (let c = 0; c < 3; c++) raw[y * (1 + w * 3) + 1 + x * 3 + c] = Math.min(255, b.color[c] + band);
     }
   }

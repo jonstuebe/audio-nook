@@ -14,7 +14,7 @@ const pump = (n) => Array.from({ length: n }, () => ['clock +300', 'clock data']
 // Each scene: the ops after sign-in, with `shot <name>` where a picture is taken.
 const scenes = {
   main: [
-    'tap tab-library-lib_books', ...settle, 'shot library',
+    'tap tab-library-lib_books', ...settle, 'tap book-li_hobbit hover', 'clock +400 real', 'shot library',
     'tap tab-search', 'clock settle', 'type search the', ...settle, 'shot search',
     'tap tab-library-lib_books', 'clock settle', 'tap book-li_dune', ...settle, 'shot detail',
     ...play, 'shot player',

@@ -1,0 +1,137 @@
+// Covers under the pointer, a book's context menu, keyboard shortcuts, and cover placeholders.
+
+// A Mac window's size: the sidebar holds every row.
+size 1100x800
+
+test "a cover lifts under the pointer with a Play button that plays it, and shows a placeholder until its art loads"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  clock +1500 real
+  expect tree missing "book-placeholder-li_dune"
+  expect tree missing "book-play-li_hobbit"
+  tap "book-li_hobbit" hover
+  expect tree has "book-play-li_hobbit"
+  tap "book-play-li_hobbit"
+  clock data
+  clock settle
+  expect state nowItem == "li_hobbit"
+  expect text "player-title" == "The Hobbit"
+
+test "a book's context menu plays, downloads, marks it finished and not, and shows its series"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_hobbit" contextmenu
+  clock settle
+  expect text "menu-book-finish" == "Mark as Finished"
+  expect text "menu-book-series" == "Show in Middle-earth"
+  tap "menu-book-finish"
+  clock data
+  expect text "book-progress-li_hobbit" == "Finished"
+  tap "book-li_hobbit" contextmenu
+  clock settle
+  expect text "menu-book-finish" == "Mark as Not Finished"
+  tap "menu-book-finish"
+  clock data
+  expect text "book-progress-li_hobbit" == "Not started"
+  tap "book-li_martian" contextmenu
+  clock settle
+  expect text "menu-book-download" == "Download"
+  tap "menu-book-download"
+  clock data
+  clock +300
+  clock data
+  expect tree has "book-kept-li_martian"
+  tap "book-li_martian" contextmenu
+  clock settle
+  expect text "menu-book-download" == "Remove Download"
+  tap "book-li_messiah" contextmenu
+  clock settle
+  expect text "menu-book-series" == "Show in Dune Chronicles"
+  tap "menu-book-series"
+  clock data
+  clock settle
+  expect text "page-title" == "Dune Chronicles"
+  tap "series-li_dune" contextmenu
+  clock settle
+  tap "menu-book-play"
+  clock data
+  clock settle
+  expect state nowItem == "li_dune"
+
+test "⌘1… switch sidebar sections, ⌘F finds, and Space, ⌘← ⌘→ and ⌥⌘← ⌥⌘→ drive playback"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  type "root" key "Meta+3"
+  clock settle
+  expect state nav.tab == "downloads"
+  type "root" key "Meta+5"
+  clock data
+  clock settle
+  expect state nav.tab == "library"
+  expect state currentLibrary == "lib_kids"
+  type "root" key "Meta+1"
+  clock settle
+  expect state nav.tab == "home"
+  type "root" key "Meta+f"
+  clock settle
+  expect state nav.tab == "search"
+  type "root" key "Meta+4"
+  clock data
+  clock settle
+  expect state currentLibrary == "lib_books"
+  type "root" key "Meta+1"
+  clock data
+  clock settle
+  tap "continue-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  clock +600 real
+  tap "play-pause"
+  clock +300 real
+  expect state paused == true
+  expect text "elapsed" == "0:45"
+  type "root" key "Meta+ArrowRight"
+  clock +300 real
+  expect text "elapsed" == "1:15"
+  type "root" key "Meta+ArrowLeft"
+  clock +300 real
+  expect text "elapsed" == "0:45"
+  type "root" key "Alt+Meta+ArrowRight"
+  clock +300 real
+  expect text "player-chapter" == "Book Three: The Prophet"
+  type "root" key "Alt+Meta+ArrowLeft"
+  clock +300 real
+  expect text "player-chapter" == "Book Two: Muad’Dib"
+  type "root" key "Space"
+  clock +300 real
+  expect state paused == false
+  type "root" key "Space"
+  clock +300 real
+  expect state paused == true

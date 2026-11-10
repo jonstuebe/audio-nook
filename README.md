@@ -13,6 +13,7 @@ it says otherwise.
 | `app/app.ts` | Every Audiobookshelf API call, and the sign-in kept in the Keychain |
 | `app/app.test.contract` | The tests, run against the mock server on every host |
 | `app/library.contract` | Browsing pieces: cover grid, list, shelves, series, author and collection cards |
+| `app/polish.test.contract` | Hover and Play on covers, context menus, keyboard shortcuts, placeholders |
 | `app/layouts.test.contract` | Shelves, sort, filter, grid/list, paging, series, authors, collections |
 | `app/offline.ts` | Offline listening: downloads into app storage, and progress queued for the server |
 | `app/downloads.test.contract` | Download, cancel, remove, play with no network, sync when back |
@@ -107,6 +108,9 @@ The tests cover:
   the library chosen in the sidebar, and a result opens its detail.
 - **Mini player:** it shows while you browse other sections, plays, pauses and skips, and opens the
   player.
+- **Polish** (both hosts): hovering a cover shows its Play button, which plays it. Placeholders go
+  once art loads. The context menu marks Finished and back, downloads, removes, shows the series
+  and plays. ⌘1–⌘5 switch sections, ⌘F finds, and Space, ⌘← ⌘→, ⌥⌘← ⌥⌘→ drive playback.
 - **Layouts** (both hosts): Listen Now's shelves of books, series and authors. A library sorted by
   title, author, recently added and progress; filtered by in progress, finished, not started and
   downloaded, with an empty filter's way back. Grid and list views, and the 60-book Archive library
@@ -190,6 +194,15 @@ colours and fonts.
   player's state as props and handles its buttons' messages, so it is always in step with the
   main player. AppKit autosaves its position.
 
+- **Menus and keys:** a book's right-click menu (Play, Download / Remove Download, Mark as Finished
+  / Not Finished, Show in its series) is an `NSMenu`. Playback is in the menu bar's View menu and the
+  Dock menu: Play/Pause, Skip Back/Forward 30 Seconds (⌘← ⌘→), Previous/Next Chapter (⌥⌘← ⌥⌘→).
+  Space plays and pauses, except on the Search page. Find in Library (⌘F) is in Edit, and the
+  sidebar's sections are ⌘1… in Go, as AppKit files them.
+- **Covers:** each cover keeps its art's own shape, square or portrait, standing on the shelf's
+  floor as Books draws it, with a placeholder until it loads. Pressing scales it (`:active`
+  `-exact-press-scale`, the host's own press).
+
 **Approximated (Exact has no such primitive yet):**
 
 - **Search field in the sidebar.** Exact's sidebar holds only rows, so search is a Search row whose
@@ -200,6 +213,13 @@ colours and fonts.
 - **Large titles.** The Mac toolbar has none ("there is no large title" in Exact's bar), so each
   page draws its title in `-exact-large-title` at the top of its content, as Books does under its
   toolbar. The toolbar shows the same title, small.
+- **Hover on covers.** Apple hosts don't draw `:hover` state parts yet (Exact's LLP 1121 stage 8 B),
+  so a cover tracks the pointer with its `hover` event. That lifts its shadow and shows a glass Play
+  button, at the cost of a state change per hover.
+- **No "Controls" menu.** `-exact-menu` files a command only into the standard menus, so playback
+  lives in View and the Dock menu, where Music has a Controls menu of its own.
+- **Space as a shortcut.** A bare Space shortcut would take the key from a text field, so it is
+  present only off the Search page. The sign-in form hides all shortcuts.
 - **Shelves scroll sideways in a `scroll`**, not an `NSCollectionView` with paging arrows.
 - **Lists are rows in a scroll, not a virtualized `list`** (an `NSTableView` on the Mac). A
   virtualized list holds one `for` and nothing else, and the page's large title and paging marker
@@ -299,6 +319,8 @@ colours and fonts.
 | Mini player while browsing | Done (Liquid Glass) |
 | Listen Now shelves from ABS's personalized shelves | Done |
 | Series, Authors and Collections pages, with detail pages | Done |
+| Hover and pressed covers, context menus, keyboard shortcuts, menu bar playback | Done (hover drawn by the app; playback in View and the Dock menu) |
+| Cover art at its own aspect ratio, placeholders, empty and loading states | Done |
 | Grid/list toggle, sort, filter, paging | Done (24 at a time, loaded as you scroll) |
 | Mini Player window | Done on macOS (a native module's `NSPanel`) |
 | Offline downloads: progress, cancel, delete, Downloads row, offline playback, queued sync | Done (progress per track, while the app runs) |
