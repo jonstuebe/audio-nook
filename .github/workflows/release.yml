@@ -132,6 +132,17 @@ jobs:
             app-build-v3-${{ steps.toolchain.outputs.cache-primary-key }}-
             app-build-v3-
 
+      # A fallback build was made from other app sources, but the fixed mtimes above make every
+      # source look as old as it, so the bake would keep its stale assets (and the packager refuses
+      # them). Date the app's own sources now; Exact's crates keep their fixed dates and stay built.
+      - name: Mark the app's sources changed over an older build
+        if: steps.appbuild.outputs.cache-hit != 'true'
+        working-directory: audio-nook/app
+        run: |
+          set -euo pipefail
+          find . -maxdepth 1 \( -name '*.contract' -o -name '*.ts' -o -name 'app.json' -o -name 'app.tamber' \) -exec touch {} +
+          find modules assets -exec touch {} +
+
       - name: Set up Exact
         id: setup
         working-directory: exact
