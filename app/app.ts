@@ -191,6 +191,8 @@ function sortLocally(books: Book[], sort: string): Book[] {
 type AuthorBody = { id: string; name?: string; description?: string | null; imagePath?: string | null; numBooks?: number };
 type SeriesBody = { id: string; name?: string; books?: Item[] };
 type CollectionBody = { id: string; name?: string; description?: string | null; books?: Item[] };
+type PlaylistBody = { id: string; name?: string; description?: string | null; items?: { libraryItemId?: string; episodeId?: string; libraryItem?: Item }[] };
+const bookItems = (p: PlaylistBody): Item[] => (p.items ?? []).filter((x) => !x.episodeId && x.libraryItem).map((x) => x.libraryItem!);
 // An author's photo needs no auth (Auth.js `ignorePatterns`); one without a photo has no URL.
 const authorImage = (store: Store, a: AuthorBody) => (a.imagePath ? `${store.get('abs-server') ?? ''}/api/authors/${encodeURIComponent(a.id)}/image` : '');
 const authorCard = (store: Store, a: AuthorBody) => ({ id: a.id, name: str(a.name), image: authorImage(store, a), count: num(a.numBooks) });
@@ -316,8 +318,8 @@ const sources: Sources = {
 
   libraries: async ([server], store) => {
     if (!server) return [];
-    const body = (await api(store, '/api/libraries')) as { libraries?: { id: string; name: string; mediaType?: string }[] };
-    return (body.libraries ?? []).map((l) => ({ id: l.id, name: l.name }));
+    const body = (await api(store, '/api/libraries')) as { libraries?: { id: string; name: string; mediaType?: string; icon?: string }[] };
+    return (body.libraries ?? []).map((l) => ({ id: l.id, name: l.name, icon: str(l.icon) }));
   },
 
   // LibraryController.getLibraryItems: `sort`, `desc`, `filter` (group.<base64 value>, as
@@ -434,6 +436,24 @@ const sources: Sources = {
     if (!server || !id) return { id: '', name: '', description: '', books: [] };
     const [c, progress] = await Promise.all([api(store, `/api/collections/${encodeURIComponent(id)}`) as Promise<CollectionBody>, progressMap(store)]);
     return { id: c.id, name: str(c.name), description: str(c.description), books: (c.books ?? []).map((i) => book(store, i, progress)) };
+  },
+
+  // GET /api/playlists (PlaylistController.findAllForUser): the user's playlists across the
+  // libraries they can reach, each Playlist.toOldJSONExpanded. A book item is `{ libraryItemId,
+  // libraryItem }`; a podcast episode has an `episodeId` too, and has no place in a book player.
+  playlists: async ([server], store) => {
+    if (!server) return [];
+    const body = (await api(store, '/api/playlists')) as { playlists?: PlaylistBody[] };
+    return (body.playlists ?? []).map((p) => {
+      const books = bookItems(p);
+      return { id: p.id, name: str(p.name), count: books.length, covers: books.slice(0, 3).map((i) => coverUrl(store, i.id)) };
+    });
+  },
+  // GET /api/playlists/:id: `{ id, name, description, books }`, as a collection's page reads.
+  playlist: async ([server, id], store) => {
+    if (!server || !id) return { id: '', name: '', description: '', books: [] };
+    const [p, progress] = await Promise.all([api(store, `/api/playlists/${encodeURIComponent(id)}`) as Promise<PlaylistBody>, progressMap(store)]);
+    return { id: p.id, name: str(p.name), description: str(p.description), books: bookItems(p).map((i) => book(store, i, progress)) };
   },
 
   // GET /api/libraries/:id/search (LibraryController.search → libraryItemsBookFilters.search):

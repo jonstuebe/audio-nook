@@ -1,5 +1,5 @@
 // Captures the README's macOS screenshots in light and dark mode, in the window as a person sees
-// it (`--chrome platform`: AppKit's sidebar, toolbar and title bar). `bun tools/screenshots.mjs
+// it (`--chrome platform`: the window's toolbar and title bar, beside the app's own sidebar). `bun tools/screenshots.mjs
 // [scene …]` after `bun exact.mjs mac`; with no scene it takes them all. The agent starts
 // mock/server.ts itself. Writes docs/screenshots/<name>-<light|dark>.png.
 import { spawnSync } from 'node:child_process';
@@ -15,13 +15,14 @@ const pump = (n) => Array.from({ length: n }, () => ['clock +300', 'clock data']
 const scenes = {
   main: [
     'tap tab-library-lib_books', ...settle, 'tap book-li_hobbit hover', 'clock +400 real', 'shot library',
-    'tap tab-search', 'clock settle', 'type search the', ...settle, 'shot search',
+    'type search the', ...settle, 'shot search', 'tap search-clear', 'clock settle',
     'tap tab-library-lib_books', 'clock settle', 'tap book-li_dune', ...settle, 'shot detail',
     ...play, 'shot player',
     'tap player-chapters', 'clock settle', 'clock +800 real', 'shot player-chapters', 'tap player-chapters', 'clock settle',
-    'back', 'clock settle', 'back', ...settle, 'shot mini-player',
-    'type book-li_dune key Control+Meta+s', 'clock +1200 real', 'shot sidebar-collapsed',
-    'type book-li_dune key Control+Meta+s', 'clock +800 real',
+    'back', 'clock settle', 'back', ...settle, 'tap section-browse', 'clock settle', 'clock +600 real', 'shot sidebar-playing',
+    'tap section-browse', 'clock settle',
+    'type root key Control+Meta+s', 'clock +1200 real', 'shot sidebar-collapsed',
+    'type root key Control+Meta+s', 'clock +800 real',
   ],
   'mini-player-window': [
     'tap continue-li_dune', ...settle, ...play, 'tap player-mini-window', 'clock +2500 real', 'panel mini-player-window',
@@ -31,6 +32,7 @@ const scenes = {
     'tap tab-library-lib_books', ...settle, 'tap view-authors', ...settle, 'tap author-au_herbert', ...settle, 'clock +800 real', 'shot author',
     'back', 'clock settle', 'tap view-series', ...settle, 'tap series-se_dune', ...settle, 'shot series',
     'back', 'clock settle', 'tap view-books', ...settle, 'tap layout-button', ...settle, 'shot list-view', 'tap layout-button', 'clock settle',
+    'tap tab-playlist-pl_roadtrip', ...settle, 'clock +800 real', 'shot playlist',
   ],
   details: [
     'tap tab-library-lib_books', ...settle, 'tap book-li_dune', ...settle, 'clock +1500 real', 'shot detail-wide',

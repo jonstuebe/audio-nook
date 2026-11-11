@@ -7,7 +7,7 @@
 // (ACCESS_TTL_MS, default 1 h) and accepted as a Bearer or `?token=`; POST /auth/refresh with
 // `x-refresh-token` rotates both; /logout ends the refresh token's session. The `legacy` account
 // is a pre-2.26 server's: one `user.token` that never expires and no refresh token.
-import { AUTHORS, BOOKS, COLLECTIONS, LIBRARIES, USER, LEGACY_USER, LEGACY_TOKEN, PASSWORD, coverPng } from './fixtures.ts';
+import { AUTHORS, BOOKS, COLLECTIONS, LIBRARIES, PLAYLISTS, USER, LEGACY_USER, LEGACY_TOKEN, PASSWORD, coverPng } from './fixtures.ts';
 
 const PORT = Number(process.env.PORT ?? 13378);
 
@@ -59,8 +59,9 @@ function issue(username: string) {
   refresh.set(refreshToken, username);
   return { accessToken, refreshToken };
 }
+const tokenOf = (req: Request, url: URL) => req.headers.get('authorization')?.replace(/^Bearer /, '') ?? url.searchParams.get('token') ?? '';
 function authed(req: Request, url: URL) {
-  const token = req.headers.get('authorization')?.replace(/^Bearer /, '') ?? url.searchParams.get('token') ?? '';
+  const token = tokenOf(req, url);
   if (token === LEGACY_TOKEN) return true;
   const a = access.get(token);
   return !!a && a.expires > Date.now();
@@ -139,6 +140,13 @@ function seriesOf(libraryId: string) {
 }
 function collectionJson(c: (typeof COLLECTIONS)[number]) {
   return { id: c.id, libraryId: c.libraryId, name: c.name, description: c.description, books: c.bookIds.map((id) => expanded(BOOKS.find((b) => b.id === id)!)), lastUpdate: 0, createdAt: 0 };
+}
+// Playlist.toOldJSONExpanded: each item a book's `{ libraryItemId, libraryItem }`, expanded.
+function playlistJson(p: (typeof PLAYLISTS)[number]) {
+  return {
+    id: p.id, name: p.name, libraryId: p.libraryId, userId: p.userId, description: p.description || null, lastUpdate: 0, createdAt: 0,
+    items: p.bookIds.map((id) => ({ libraryItemId: id, libraryItem: expanded(BOOKS.find((b) => b.id === id)!) })),
+  };
 }
 function progressOf(id: string) {
   const p = progress.get(id);
@@ -270,6 +278,14 @@ async function route(req: Request): Promise<Response> {
     }
     if (path === '/api/me') return json({ ...USER, mediaProgress: BOOKS.map((b) => progressOf(b.id)).filter(Boolean) });
     if (path === '/api/libraries') return json({ libraries: LIBRARIES });
+    // PlaylistController.findAllForUser and findOne: the signed-in user's own.
+    const userId = tokenOf(req, url) === LEGACY_TOKEN ? LEGACY_USER.id : USER.id;
+    if (path === '/api/playlists') return json({ playlists: PLAYLISTS.filter((p) => p.userId === userId).map(playlistJson) });
+    const pl = path.match(/^\/api\/playlists\/([^/]+)$/);
+    if (pl) {
+      const p = PLAYLISTS.find((x) => x.id === pl[1] && x.userId === userId);
+      return p ? json(playlistJson(p)) : new Response('Not Found', { status: 404 });
+    }
     // LibraryController.getLibraryItems: sort, desc, filter (group.<base64 value>), limit and page.
     let m = path.match(/^\/api\/libraries\/([^/]+)\/items$/);
     if (m) {

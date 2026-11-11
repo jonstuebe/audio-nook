@@ -8,6 +8,7 @@ use clockText, lengthText, progressText, percentText, booksText, dlState, dlProg
 use Chapter, Detail from "./detail.contract"
 use ItemDetail, AuthorHeader, GroupHeader, NumberedBooks from "./detail.contract"
 use NowPlaying, PlayerBackdrop from "./player.contract"
+use Library, Sidebar, librarySymbol from "./sidebar.contract"
 use dlBytes from "./library.contract"
 use LargeTitle, BookGrid, BookList, SeriesBooks, SeriesGrid, AuthorGrid, CollectionGrid, ShelfRow, AuthorPhoto from "./library.contract"
 
@@ -23,6 +24,7 @@ routes nav
   tab search "/search"
   tab downloads "/downloads"
   tab library "/library"
+  tab playlist "/playlist"
 
 shape Session
   signedIn: bool
@@ -33,10 +35,6 @@ shape Session
 shape Reply
   ok: bool
   error: string
-
-shape Library
-  id: string
-  name: string
 
 shape Author
   id: string
@@ -84,7 +82,11 @@ fn chapterTitle(chapters: Chapter[], i: number): string = match chapters.at(i) {
 fn chapterStart(chapters: Chapter[], i: number): number = match chapters.at(i) { case some(c) => c.start, case none => 0 }
 fn rateText(r: number): string = `${r}×`
 // Which panel shows a tab's stack: a library's own for the library tab.
-fn holds(panel: string, tab: string, library: string): bool = tab == "library" ? panel == `library-${library}` : panel == tab
+fn holds(panel: string, tab: string, library: string, playlist: string): bool = tab == "library" ? panel == `library-${library}` : tab == "playlist" ? panel == `playlist-${playlist}` : panel == tab
+// The sidebar's row for what shows: a tab, a library's books, a Browse view, or a playlist.
+fn sidebarKeyOf(tab: string, library: string, view: string, playlist: string): string = tab == "library" ? (view == "books" ? `lib:${library}` : view) : tab == "playlist" ? `pl:${playlist}` : tab
+// "https://abs.example.com:443/" → "abs.example.com:443": the account's server, as the foot shows it.
+fn hostOf(server: string): string = match server.replaceAll("https://", "").replaceAll("http://", "").split("/").at(0) { case some(h) => h, case none => "" }
 // A series' or collection's facts: how many books, how long, how many finished.
 fn groupFacts(books: Book[]): string = `${booksText(books.length)} · ${lengthText(sum(books.map(b => b.duration)))}${books.filter(b => b.progress >= 1).length > 0 ? ` · ${books.filter(b => b.progress >= 1).length} finished` : ""}`
 fn nameOf(libraries: Library[], id: string): string = libraries.filter(l => l.id == id).map(l => l.name).join("")
@@ -95,6 +97,13 @@ component App
   state username = ""
   state password = ""
   state libraryId = "" persist
+  // The sidebar: shown or folded away (⌃⌘S), its width, its folded sections, and the playlist shown.
+  state sidebarOpen = true persist
+  state sidebarWidth = 220 persist
+  state librariesOpen = true persist
+  state browseOpen = true persist
+  state playlistsOpen = true persist
+  state playlistId = "" persist
   state query = ""
   // A library's page: books, series, authors or collections; books as a grid or a list, in an
   // order, filtered; and how many pages of books have been asked for.
@@ -151,7 +160,17 @@ component App
   derive filterLabel = filterChoices.filter(c => c.key == filterKey).map(c => c.label).join("")
   derive selected = match stack(nav).filter(e => e.name == "item").at(-1) { case some(e) => e.params.id, case none => "" }
   resource detail = itemDetail(api, selected) as shape Detail else empty()
-  derive panels = ["home", "search", "downloads"].concat(libraries.map(l => `library-${l.id}`))
+  resource playlists = playlists(api) as shape CollectionCard[] else empty()
+  derive currentPlaylist = playlists.filter(p => p.id == playlistId).length > 0 ? playlistId : match first(playlists) { case some(p) => p.id, case none => "" }
+  resource playlistPage = playlist(api, nav.tab == "playlist" ? currentPlaylist : "") as shape CollectionPage else empty()
+  derive panels = ["home", "search", "downloads"].concat(libraries.map(l => `library-${l.id}`)).concat(playlists.map(p => `playlist-${p.id}`))
+  // The sidebar's rows in order, folded sections left out: what ↑ and ↓ move through.
+  derive sidebarRows = ["home", "downloads"].concat(librariesOpen ? libraries.map(l => `lib:${l.id}`) : []).concat(browseOpen ? ["series", "authors", "collections"] : []).concat(playlistsOpen ? playlists.map(p => `pl:${p.id}`) : [])
+  derive sidebarCurrent = sidebarKeyOf(nav.tab, currentLibrary, libraryView, currentPlaylist)
+  derive inProgressCount = match home.shelves.filter(sh => sh.id == "continue-listening").at(0) { case some(sh) => sh.books.length, case none => 0 }
+  derive downloadedCount = downloads.filter(d => d.state == "done").length
+  // The libraries as the sidebar draws them: each icon its symbol.
+  derive sidebarLibraries = libraries.map(l => Library(id=l.id, name=l.name, icon=librarySymbol(l.icon)))
   resource results = search(api, currentLibrary, query) as shape SearchResults else empty()
 
   mutation loggedIn as shape Reply refreshes session, libraries, page, home, detail
@@ -273,8 +292,53 @@ component App
         paused = paused
   // ⌘F: the Search page, its field focused.
   action findInLibrary
+    sidebarOpen = true
     nav = select(nav, "search")
     focus("search-field")
+  // The sidebar's search field: what is typed shows on the Search page.
+  action sidebarSearch(v: string)
+    query = v
+    if v.trim() != "" and nav.tab != "search"
+      nav = select(nav, "search")
+  action submitSearch
+    nav = select(nav, "search")
+  // A sidebar row, by its key: a tab, a library's books, a Browse view of the library, a playlist.
+  action go(key: string)
+    // Another row leaves the search field, so Space plays again rather than typing.
+    if key != "search"
+      blur("search-field")
+    if key == "home" or key == "downloads" or key == "search"
+      nav = select(nav, key)
+    else if key.startsWith("lib:")
+      libraryView = "books"
+      showLibrary(key.slice(4))
+    else if key.startsWith("pl:")
+      playlistId = key.slice(3)
+      nav = select(nav, "playlist")
+    else
+      libraryView = key
+      nav = select(nav, "library")
+  // ↑ and ↓ in the sidebar move the selection, as a source list's do.
+  action sidebarKey(k: string)
+    let i = sidebarRows.indexOf(sidebarCurrent)
+    if k == "ArrowDown"
+      go(match sidebarRows.at(min(i + 1, sidebarRows.length - 1)) { case some(r) => r, case none => sidebarCurrent })
+    else if k == "ArrowUp"
+      go(match sidebarRows.at(max(i - 1, 0)) { case some(r) => r, case none => sidebarCurrent })
+  action toggleSection(name: string)
+    if name == "libraries"
+      librariesOpen = not librariesOpen
+    else if name == "browse"
+      browseOpen = not browseOpen
+    else
+      playlistsOpen = not playlistsOpen
+  // View ▸ Hide Sidebar (⌃⌘S), and the sidebar's edge dragged.
+  action toggleSidebar
+    sidebarOpen = not sidebarOpen
+  action resizeSidebar(dx: number, dy: number)
+    sidebarWidth = max(180, min(360, sidebarWidth + dx))
+  action copyServer
+    copyText(session.server)
   action showView(v: string)
     libraryView = v
   action setSort(k: string)
@@ -461,290 +525,300 @@ component App
           editServer=editServer, editUsername=editUsername, editPassword=editPassword, signIn=signIn)
       // The panels: one per sidebar row. A library's routes live in its own panel, so the
       // sidebar marks the row of the library they show.
-      column flex=1 min-height=0 position="relative" display=(showSignIn ? "none" : "flex")
-        for p in panels key=p
-          column role="tabpanel" id=`panel-${p}` position="absolute" inset=0
-            for t in nav.tabs.filter(t => holds(p, t.name, currentLibrary)) key=t.name
-              for e in t.stack key=e.id
-                if e.name == "home"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" gap=8 padding="8px 16px"
-                      text "Listen Now" role="heading" aria-level=1 flex=1
-                      button press=signOut aria-label="Sign Out" testId="sign-out"
-                        image "symbol:sign-out"
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      column gap=32 padding="28px 32px 120px"
-                        LargeTitle(title="Listen Now", subtitle=session.username == "" ? session.server : `${session.username} · ${session.server}`)
-                        if failed(home)
-                          EmptyState(symbol="symbol:alert", title="Can’t Reach the Server", message=`Couldn’t load your books from ${session.server}.`)
-                            button press=showTab("downloads") testId="home-offline-downloads"
-                              text "Go to Downloads"
-                        else if home.shelves.length == 0 and pending(home)
-                          column align-items="center" padding="48px 0" testId="home-loading"
-                            progress aria-label="Loading"
-                        else if home.shelves.length == 0
-                          EmptyState(symbol="symbol:icon.headphones", title="Nothing Here Yet", message="Books in this library appear here once it has some.")
-                            button press=showLibrary(currentLibrary) testId="empty-browse"
-                              text "Browse the Library"
-                        else
-                          for sh in home.shelves key=sh.id
-                            ShelfRow(shelf=sh, downloads=downloads, menu=openBookMenu, playNow=play)
-                if e.name == "search"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" gap=8 padding="8px 16px"
-                      text "Search" role="heading" aria-level=1 flex=1
-                      input type="search" id="search-field" value=query input=searchFor placeholder=`Search ${nameOf(libraries, currentLibrary)}` aria-label="Search" testId="search"
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      column gap=28 padding="28px 32px 120px"
-                        LargeTitle(title="Search", subtitle=nameOf(libraries, currentLibrary))
-                        if query.trim() == ""
-                          EmptyState(symbol="symbol:search", title="Search Your Library", message="Find books by title, or authors by name.")
-                        else if failed(results)
-                          EmptyState(symbol="symbol:alert", title="Search Didn’t Work", message="The server didn’t answer. Try again.")
-                        else if results.query == query.trim() and results.books.length == 0 and results.authors.length == 0 and not pending(results)
-                          EmptyState(symbol="symbol:search", title=`No Results for “${query.trim()}”`, message="Check the spelling or try a new search.")
-                        else
-                          if results.authors.length > 0
-                            column gap=10
-                              text "Authors" font="-exact-title2" font-weight=700
-                              row gap=10 flex-wrap="wrap"
-                                for a in results.authors key=a.id
-                                  row gap=6 align-items="center" padding="6px 12px" border-radius=999 background-color="-exact-secondary-fill"
-                                    image "symbol:person" color="-exact-secondary-label"
-                                    text a.name testId=`author-${a.id}`
-                          if results.books.length > 0
-                            column gap=14
-                              text "Books" font="-exact-title2" font-weight=700
-                              BookGrid(books=results.books, prefix="result", downloads=downloads, menu=openBookMenu, playNow=play)
-                if e.name == "library"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    // The toolbar: the library's title, its four views as segments, and for books the
-                    // layout, Sort and Filter (each a menu).
-                    header display="flex" align-items="center" gap=8 padding="8px 16px"
-                      text nameOf(libraries, currentLibrary) role="heading" aria-level=1 flex=1
-                      row role="tablist" aria-label="View"
-                        button role="tab" aria-selected=(libraryView == "books") press=showView("books") testId="view-books"
-                          text "Books"
-                        button role="tab" aria-selected=(libraryView == "series") press=showView("series") testId="view-series"
-                          text "Series"
-                        button role="tab" aria-selected=(libraryView == "authors") press=showView("authors") testId="view-authors"
-                          text "Authors"
-                        button role="tab" aria-selected=(libraryView == "collections") press=showView("collections") testId="view-collections"
-                          text "Collections"
-                      if libraryView == "books"
-                        button press=toggleLayout aria-label=(layout == "grid" ? "Show as List" : "Show as Grid") testId="layout-button"
-                          image (layout == "grid" ? "symbol:list" : "symbol:icon.grid")
-                        button popovertarget="sort-menu" aria-label="Sort" testId="sort-button"
-                          image "symbol:sort"
-                        button popovertarget="filter-menu" aria-label="Filter" testId="filter-button"
-                          image (filterKey == "all" ? "symbol:filter" : "symbol:icon.filter-on")
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      column gap=28 padding="28px 32px 120px"
-                        if libraryView == "series"
-                          LargeTitle(title="Series", subtitle=nameOf(libraries, currentLibrary))
-                          if failed(seriesCards)
-                            EmptyState(symbol="symbol:alert", title="Can’t Load Series", message="The server didn’t answer.")
-                          else if seriesCards.length == 0 and pending(seriesCards)
-                            column align-items="center" padding="48px 0"
-                              progress aria-label="Loading"
-                          else if seriesCards.length == 0
-                            EmptyState(symbol="symbol:layers", title="No Series", message="Books that belong to a series are grouped here.")
-                          else
-                            SeriesGrid(series=seriesCards, prefix="series")
-                        else if libraryView == "authors"
-                          LargeTitle(title="Authors", subtitle=nameOf(libraries, currentLibrary))
-                          if failed(authorCards)
-                            EmptyState(symbol="symbol:alert", title="Can’t Load Authors", message="The server didn’t answer.")
-                          else if authorCards.length == 0 and pending(authorCards)
-                            column align-items="center" padding="48px 0"
-                              progress aria-label="Loading"
-                          else if authorCards.length == 0
-                            EmptyState(symbol="symbol:people", title="No Authors", message="This library has no authors yet.")
-                          else
-                            AuthorGrid(authors=authorCards, prefix="author")
-                        else if libraryView == "collections"
-                          LargeTitle(title="Collections", subtitle=nameOf(libraries, currentLibrary))
-                          if failed(collectionCards)
-                            EmptyState(symbol="symbol:alert", title="Can’t Load Collections", message="The server didn’t answer.")
-                          else if collectionCards.length == 0 and pending(collectionCards)
-                            column align-items="center" padding="48px 0"
-                              progress aria-label="Loading"
-                          else if collectionCards.length == 0
-                            EmptyState(symbol="symbol:bookmark", title="No Collections", message="Collections made on the server appear here.")
-                          else
-                            CollectionGrid(collections=collectionCards)
-                        else
-                          LargeTitle(title=nameOf(libraries, currentLibrary), subtitle=(pending(page) and books.length == 0 ? "" : filterKey == "all" ? booksText(page.total) : `${booksText(page.total)} · ${filterLabel}`))
-                          if failed(page)
-                            EmptyState(symbol="symbol:alert", title="Can’t Load the Library", message=`Couldn’t reach ${session.server}.`)
-                              button press=signOut testId="failed-sign-out"
-                                text "Sign Out"
-                          else if books.length == 0 and pending(page)
-                            column align-items="center" padding="48px 0" testId="library-loading"
-                              progress aria-label="Loading"
-                          else if books.length == 0 and filterKey != "all"
-                            EmptyState(symbol="symbol:filter", title=`No ${filterLabel} Books`, message="Try another filter.")
-                              button press=setFilter("all") testId="filter-clear"
-                                text "Show All Books"
-                          else if books.length == 0 and not pending(libraries)
-                            EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
-                          else
-                            if layout == "list"
-                              BookList(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
-                            else
-                              BookGrid(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
-                            // More as the end comes into view; the button for a reader who would rather press.
-                            if books.length < page.total
-                              view intersect=loadMore height=1 testId="more-marker"
-                              row justify-content="center"
-                                button press=loadMore disabled=pending(page) testId="load-more"
-                                  text (pending(page) ? "Loading…" : `Show More (${page.total - books.length} more)`)
-                    column id="sort-menu" popover="auto" role="menu" aria-label="Sort"
-                      for c in sortChoices key=c.key
-                        button press=setSort(c.key) popovertarget="sort-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(sortKey == c.key) testId=`sort-${c.key}`
-                          text c.label
-                    column id="filter-menu" popover="auto" role="menu" aria-label="Filter"
-                      for c in filterChoices key=c.key
-                        button press=setFilter(c.key) popovertarget="filter-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(filterKey == c.key) testId=`filter-${c.key}`
-                          text c.label
-                if e.name == "author"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" padding="8px 16px"
-                      button id="back" press=back aria-label="Back"
-                        image "symbol:back"
-                      text (authorPage.id == e.params.id ? authorPage.name : "") role="heading" aria-level=2
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      if failed(authorPage)
-                        EmptyState(symbol="symbol:alert", title="Can’t Load This Author", message="The server didn’t answer.")
-                      else if authorPage.id != e.params.id
-                        column align-items="center" padding="48px 0"
-                          progress aria-label="Loading"
-                      else
-                        column
-                          AuthorHeader(name=authorPage.name, image=authorPage.image, count=authorPage.books.length, bio=authorPage.description)
-                          column gap=32 padding="8px 32px 120px"
-                            if authorPage.series.length > 0
-                              column gap=14
-                                text "Series" font="-exact-title2" font-weight=700
-                                SeriesGrid(series=authorPage.series, prefix="authorseries")
-                            column gap=14
-                              text "Books" font="-exact-title2" font-weight=700
-                              BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
-                if e.name == "series"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" padding="8px 16px"
-                      button id="back" press=back aria-label="Back"
-                        image "symbol:back"
-                      text (seriesPage.id == e.params.id ? seriesPage.name : "") role="heading" aria-level=2
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      if failed(seriesPage)
-                        EmptyState(symbol="symbol:alert", title="Can’t Load This Series", message="The server didn’t answer.")
-                      else if seriesPage.id != e.params.id
-                        column align-items="center" padding="48px 0"
-                          progress aria-label="Loading"
-                      else
-                        column
-                          GroupHeader(kind="Series", name=seriesPage.name, covers=seriesPage.entries.slice(0, 3).map(x => x.book.cover),
-                            facts=groupFacts(seriesPage.entries.map(x => x.book)), note="")
-                          NumberedBooks(entries=seriesPage.entries, prefix="series", numbered=true, menu=openBookMenu)
-                if e.name == "collection"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" padding="8px 16px"
-                      button id="back" press=back aria-label="Back"
-                        image "symbol:back"
-                      text (collectionPage.id == e.params.id ? collectionPage.name : "") role="heading" aria-level=2
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      if failed(collectionPage)
-                        EmptyState(symbol="symbol:alert", title="Can’t Load This Collection", message="The server didn’t answer.")
-                      else if collectionPage.id != e.params.id
-                        column align-items="center" padding="48px 0"
-                          progress aria-label="Loading"
-                      else
-                        column
-                          GroupHeader(kind="Collection", name=collectionPage.name, covers=collectionPage.books.slice(0, 3).map(b => b.cover),
-                            facts=groupFacts(collectionPage.books), note=collectionPage.description)
-                          NumberedBooks(entries=collectionPage.books.map((b, n) => SeriesEntry(sequence=`${n + 1}`, book=b)), prefix="collectionbook", numbered=false, menu=openBookMenu)
-                if e.name == "downloads"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" gap=8 padding="8px 16px"
-                      text "Downloads" role="heading" aria-level=1 flex=1
-                    scroll id=`scroll-${e.id}` flex=1 min-height=0
-                      column gap=28 padding="28px 32px 120px"
-                        LargeTitle(title="Downloads", subtitle=(pending.count > 0 ? `${pending.count} ${pending.count == 1 ? "book's" : "books’"} progress waiting to sync` : "Books you can listen to without a connection"))
-                        if downloads.length == 0 and not pending(downloads)
-                          EmptyState(symbol="symbol:download", title="No Downloads", message="Download a book from its page to listen without a connection.")
-                        else
-                          BookGrid(books=keptBooks, prefix="download", downloads=downloads, menu=openBookMenu, playNow=play)
-                if e.name == "item"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" padding="8px 16px"
-                      button id="back" press=back aria-label="Back"
-                        image "symbol:back"
-                      text (detail.id == e.params.id ? detail.title : "") role="heading" aria-level=2 testId="detail-heading"
-                    if failed(detail)
-                      EmptyState(symbol="symbol:alert", title="Can’t Load This Book", message="The server didn’t answer.")
-                    else
+      // The sidebar beside the panels: one panel per sidebar row. A library's or a playlist's routes
+      // live in its own panel, so the sidebar marks the row they show.
+      row flex=1 min-height=0 display=(showSignIn ? "none" : "flex")
+        Sidebar(open=sidebarOpen, width=sidebarWidth, query=query, current=sidebarCurrent, libraries=sidebarLibraries, playlists=playlists,
+          inProgress=inProgressCount, downloaded=downloadedCount, librariesOpen=librariesOpen, browseOpen=browseOpen, playlistsOpen=playlistsOpen,
+          playing=playing, nowTitle=nowTitle, nowAuthor=nowAuthor, nowCover=nowCover, nowFraction=(duration > 0 ? position / duration : 0), paused=paused,
+          username=session.username, host=hostOf(session.server), search=sidebarSearch, submitSearch=submitSearch, go=go, keyed=sidebarKey,
+          toggleSection=toggleSection, toggle=toggle, openPlayer=openPlayer, copyServer=copyServer, signOut=signOut, resize=resizeSidebar)
+        column flex=1 min-width=0 min-height=0 position="relative" testId="panels"
+          for p in panels key=p
+            column role="tabpanel" id=`panel-${p}` position="absolute" inset=0
+              for t in nav.tabs.filter(t => holds(p, t.name, currentLibrary, currentPlaylist)) key=t.name
+                for e in t.stack key=e.id
+                  if e.name == "home"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" gap=8 padding="8px 16px"
+                        text "Listen Now" role="heading" aria-level=1 flex=1
                       scroll id=`scroll-${e.id}` flex=1 min-height=0
-                        if detail.id == e.params.id
-                          ItemDetail(item=detail, play=play(detail.id), playFrom=playAt(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id),
-                            currentChapter=chapter, dlState=dlState(downloads, detail.id), dlProgress=dlProgress(downloads, detail.id),
-                            dlError=dlError(downloads, detail.id), dlBytes=dlBytes(downloads, detail.id), download=download(detail.id),
-                            removeDownload=removeKept(detail.id), starts=pending(dlStarted), finish=setFinished(detail.id, detail.progress >= 1),
-                            copyLink=copyItemLink(detail.id), menu=openBookMenu, playNow=play, downloads=downloads)
-                if e.name == "player"
-                  column navigationKey=`${e.id}` navigationScroll="player-scroll" position="absolute" inset=0 display="flex" flex-direction="column"
-                    header display="flex" align-items="center" padding="8px 16px"
-                      button id="back" press=back aria-label="Back"
-                        image "symbol:back"
-                      text "Now Playing" role="heading" aria-level=2 flex=1
-                      button press=toggleMiniWindow aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="header-mini-window"
-                        image "symbol:icon.mini-player"
-                      button press=stopAndClose aria-label="Stop" testId="stop"
-                        image "symbol:stop"
-                    column flex=1 min-height=0 position="relative"
-                      if playing
-                        PlayerBackdrop(cover=nowCover)
-                        NowPlaying(title=nowTitle, author=nowAuthor, cover=nowCover, chapters=chapters, chapter=chapter, position=position,
-                          duration=duration, paused=paused, rate=rate, volume=volume, chaptersOpen=chaptersOpen, miniWindow=miniWindow,
-                          downloaded=dlState(downloads, nowItem), toggle=toggle, skip=skip, previousChapter=previousChapter, nextChapter=nextChapter,
-                          seek=seek, setRate=setRate, setVolume=setVolume, toggleChapters=toggleChapters, toggleMiniWindow=toggleMiniWindow,
-                          showBook=showNowBook, download=download(nowItem), finish=setFinished(nowItem, false), copyLink=copyItemLink(nowItem),
-                          stop=stopAndClose)
+                        column gap=32 padding="28px 32px 120px"
+                          LargeTitle(title="Listen Now", subtitle=session.username == "" ? session.server : `${session.username} · ${session.server}`)
+                          if failed(home)
+                            EmptyState(symbol="symbol:alert", title="Can’t Reach the Server", message=`Couldn’t load your books from ${session.server}.`)
+                              button press=showTab("downloads") testId="home-offline-downloads"
+                                text "Go to Downloads"
+                          else if home.shelves.length == 0 and pending(home)
+                            column align-items="center" padding="48px 0" testId="home-loading"
+                              progress aria-label="Loading"
+                          else if home.shelves.length == 0
+                            EmptyState(symbol="symbol:icon.headphones", title="Nothing Here Yet", message="Books in this library appear here once it has some.")
+                              button press=showLibrary(currentLibrary) testId="empty-browse"
+                                text "Browse the Library"
+                          else
+                            for sh in home.shelves key=sh.id
+                              ShelfRow(shelf=sh, downloads=downloads, menu=openBookMenu, playNow=play)
+                  if e.name == "search"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" gap=8 padding="8px 16px"
+                        text "Search" role="heading" aria-level=1 flex=1
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        column gap=28 padding="28px 32px 120px"
+                          LargeTitle(title="Search", subtitle=nameOf(libraries, currentLibrary))
+                          if query.trim() == ""
+                            EmptyState(symbol="symbol:search", title="Search Your Library", message="Find books by title, or authors by name.")
+                          else if failed(results)
+                            EmptyState(symbol="symbol:alert", title="Search Didn’t Work", message="The server didn’t answer. Try again.")
+                          else if results.query == query.trim() and results.books.length == 0 and results.authors.length == 0 and not pending(results)
+                            EmptyState(symbol="symbol:search", title=`No Results for “${query.trim()}”`, message="Check the spelling or try a new search.")
+                          else
+                            if results.authors.length > 0
+                              column gap=10
+                                text "Authors" font="-exact-title2" font-weight=700
+                                row gap=10 flex-wrap="wrap"
+                                  for a in results.authors key=a.id
+                                    row gap=6 align-items="center" padding="6px 12px" border-radius=999 background-color="-exact-secondary-fill"
+                                      image "symbol:person" color="-exact-secondary-label"
+                                      text a.name testId=`author-${a.id}`
+                            if results.books.length > 0
+                              column gap=14
+                                text "Books" font="-exact-title2" font-weight=700
+                                BookGrid(books=results.books, prefix="result", downloads=downloads, menu=openBookMenu, playNow=play)
+                  if e.name == "library"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      // The toolbar: the library's title, its four views as segments, and for books the
+                      // layout, Sort and Filter (each a menu).
+                      header display="flex" align-items="center" gap=8 padding="8px 16px"
+                        text nameOf(libraries, currentLibrary) role="heading" aria-level=1 flex=1
+                        row role="tablist" aria-label="View"
+                          button role="tab" aria-selected=(libraryView == "books") press=showView("books") testId="view-books"
+                            text "Books"
+                          button role="tab" aria-selected=(libraryView == "series") press=showView("series") testId="view-series"
+                            text "Series"
+                          button role="tab" aria-selected=(libraryView == "authors") press=showView("authors") testId="view-authors"
+                            text "Authors"
+                          button role="tab" aria-selected=(libraryView == "collections") press=showView("collections") testId="view-collections"
+                            text "Collections"
+                        if libraryView == "books"
+                          button press=toggleLayout aria-label=(layout == "grid" ? "Show as List" : "Show as Grid") testId="layout-button"
+                            image (layout == "grid" ? "symbol:list" : "symbol:icon.grid")
+                          button popovertarget="sort-menu" aria-label="Sort" testId="sort-button"
+                            image "symbol:sort"
+                          button popovertarget="filter-menu" aria-label="Filter" testId="filter-button"
+                            image (filterKey == "all" ? "symbol:filter" : "symbol:icon.filter-on")
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        column gap=28 padding="28px 32px 120px"
+                          if libraryView == "series"
+                            LargeTitle(title="Series", subtitle=nameOf(libraries, currentLibrary))
+                            if failed(seriesCards)
+                              EmptyState(symbol="symbol:alert", title="Can’t Load Series", message="The server didn’t answer.")
+                            else if seriesCards.length == 0 and pending(seriesCards)
+                              column align-items="center" padding="48px 0"
+                                progress aria-label="Loading"
+                            else if seriesCards.length == 0
+                              EmptyState(symbol="symbol:layers", title="No Series", message="Books that belong to a series are grouped here.")
+                            else
+                              SeriesGrid(series=seriesCards, prefix="series")
+                          else if libraryView == "authors"
+                            LargeTitle(title="Authors", subtitle=nameOf(libraries, currentLibrary))
+                            if failed(authorCards)
+                              EmptyState(symbol="symbol:alert", title="Can’t Load Authors", message="The server didn’t answer.")
+                            else if authorCards.length == 0 and pending(authorCards)
+                              column align-items="center" padding="48px 0"
+                                progress aria-label="Loading"
+                            else if authorCards.length == 0
+                              EmptyState(symbol="symbol:people", title="No Authors", message="This library has no authors yet.")
+                            else
+                              AuthorGrid(authors=authorCards, prefix="author")
+                          else if libraryView == "collections"
+                            LargeTitle(title="Collections", subtitle=nameOf(libraries, currentLibrary))
+                            if failed(collectionCards)
+                              EmptyState(symbol="symbol:alert", title="Can’t Load Collections", message="The server didn’t answer.")
+                            else if collectionCards.length == 0 and pending(collectionCards)
+                              column align-items="center" padding="48px 0"
+                                progress aria-label="Loading"
+                            else if collectionCards.length == 0
+                              EmptyState(symbol="symbol:bookmark", title="No Collections", message="Collections made on the server appear here.")
+                            else
+                              CollectionGrid(collections=collectionCards)
+                          else
+                            LargeTitle(title=nameOf(libraries, currentLibrary), subtitle=(pending(page) and books.length == 0 ? "" : filterKey == "all" ? booksText(page.total) : `${booksText(page.total)} · ${filterLabel}`))
+                            if failed(page)
+                              EmptyState(symbol="symbol:alert", title="Can’t Load the Library", message=`Couldn’t reach ${session.server}.`)
+                                button press=signOut testId="failed-sign-out"
+                                  text "Sign Out"
+                            else if books.length == 0 and pending(page)
+                              column align-items="center" padding="48px 0" testId="library-loading"
+                                progress aria-label="Loading"
+                            else if books.length == 0 and filterKey != "all"
+                              EmptyState(symbol="symbol:filter", title=`No ${filterLabel} Books`, message="Try another filter.")
+                                button press=setFilter("all") testId="filter-clear"
+                                  text "Show All Books"
+                            else if books.length == 0 and not pending(libraries)
+                              EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
+                            else
+                              if layout == "list"
+                                BookList(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
+                              else
+                                BookGrid(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
+                              // More as the end comes into view; the button for a reader who would rather press.
+                              if books.length < page.total
+                                view intersect=loadMore height=1 testId="more-marker"
+                                row justify-content="center"
+                                  button press=loadMore disabled=pending(page) testId="load-more"
+                                    text (pending(page) ? "Loading…" : `Show More (${page.total - books.length} more)`)
+                      column id="sort-menu" popover="auto" role="menu" aria-label="Sort"
+                        for c in sortChoices key=c.key
+                          button press=setSort(c.key) popovertarget="sort-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(sortKey == c.key) testId=`sort-${c.key}`
+                            text c.label
+                      column id="filter-menu" popover="auto" role="menu" aria-label="Filter"
+                        for c in filterChoices key=c.key
+                          button press=setFilter(c.key) popovertarget="filter-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(filterKey == c.key) testId=`filter-${c.key}`
+                            text c.label
+                  if e.name == "author"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" padding="8px 16px"
+                        button id="back" press=back aria-label="Back"
+                          image "symbol:back"
+                        text (authorPage.id == e.params.id ? authorPage.name : "") role="heading" aria-level=2
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        if failed(authorPage)
+                          EmptyState(symbol="symbol:alert", title="Can’t Load This Author", message="The server didn’t answer.")
+                        else if authorPage.id != e.params.id
+                          column align-items="center" padding="48px 0"
+                            progress aria-label="Loading"
+                        else
+                          column
+                            AuthorHeader(name=authorPage.name, image=authorPage.image, count=authorPage.books.length, bio=authorPage.description)
+                            column gap=32 padding="8px 32px 120px"
+                              if authorPage.series.length > 0
+                                column gap=14
+                                  text "Series" font="-exact-title2" font-weight=700
+                                  SeriesGrid(series=authorPage.series, prefix="authorseries")
+                              column gap=14
+                                text "Books" font="-exact-title2" font-weight=700
+                                BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                  if e.name == "series"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" padding="8px 16px"
+                        button id="back" press=back aria-label="Back"
+                          image "symbol:back"
+                        text (seriesPage.id == e.params.id ? seriesPage.name : "") role="heading" aria-level=2
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        if failed(seriesPage)
+                          EmptyState(symbol="symbol:alert", title="Can’t Load This Series", message="The server didn’t answer.")
+                        else if seriesPage.id != e.params.id
+                          column align-items="center" padding="48px 0"
+                            progress aria-label="Loading"
+                        else
+                          column
+                            GroupHeader(kind="Series", name=seriesPage.name, covers=seriesPage.entries.slice(0, 3).map(x => x.book.cover),
+                              facts=groupFacts(seriesPage.entries.map(x => x.book)), note="")
+                            NumberedBooks(entries=seriesPage.entries, prefix="series", numbered=true, menu=openBookMenu)
+                  if e.name == "collection"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" padding="8px 16px"
+                        button id="back" press=back aria-label="Back"
+                          image "symbol:back"
+                        text (collectionPage.id == e.params.id ? collectionPage.name : "") role="heading" aria-level=2
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        if failed(collectionPage)
+                          EmptyState(symbol="symbol:alert", title="Can’t Load This Collection", message="The server didn’t answer.")
+                        else if collectionPage.id != e.params.id
+                          column align-items="center" padding="48px 0"
+                            progress aria-label="Loading"
+                        else
+                          column
+                            GroupHeader(kind="Collection", name=collectionPage.name, covers=collectionPage.books.slice(0, 3).map(b => b.cover),
+                              facts=groupFacts(collectionPage.books), note=collectionPage.description)
+                            NumberedBooks(entries=collectionPage.books.map((b, n) => SeriesEntry(sequence=`${n + 1}`, book=b)), prefix="collectionbook", numbered=false, menu=openBookMenu)
+                  if e.name == "playlist"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" gap=8 padding="8px 16px"
+                        text (playlistPage.id == currentPlaylist ? playlistPage.name : "Playlist") role="heading" aria-level=1 flex=1
+                        button press=toggleLayout aria-label=(layout == "grid" ? "Show as List" : "Show as Grid") testId="playlist-layout-button"
+                          image (layout == "grid" ? "symbol:list" : "symbol:icon.grid")
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        column gap=28 padding="28px 32px 120px"
+                          if failed(playlistPage)
+                            EmptyState(symbol="symbol:alert", title="Can’t Load This Playlist", message="The server didn’t answer.")
+                          else if playlistPage.id != currentPlaylist
+                            column align-items="center" padding="48px 0"
+                              progress aria-label="Loading"
+                          else
+                            LargeTitle(title=playlistPage.name, subtitle=(playlistPage.description == "" ? `${booksText(playlistPage.books.length)} · ${lengthText(sum(playlistPage.books.map(b => b.duration)))}` : playlistPage.description))
+                            if playlistPage.books.length == 0
+                              EmptyState(symbol="symbol:icon.playlist", title="Empty Playlist", message="Add books to this playlist on your server.")
+                            else if layout == "grid"
+                              BookGrid(books=playlistPage.books, prefix="playlistbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                            else
+                              BookList(books=playlistPage.books, prefix="playlistbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                  if e.name == "downloads"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" gap=8 padding="8px 16px"
+                        text "Downloads" role="heading" aria-level=1 flex=1
+                      scroll id=`scroll-${e.id}` flex=1 min-height=0
+                        column gap=28 padding="28px 32px 120px"
+                          LargeTitle(title="Downloads", subtitle=(pending.count > 0 ? `${pending.count} ${pending.count == 1 ? "book's" : "books’"} progress waiting to sync` : "Books you can listen to without a connection"))
+                          if downloads.length == 0 and not pending(downloads)
+                            EmptyState(symbol="symbol:download", title="No Downloads", message="Download a book from its page to listen without a connection.")
+                          else
+                            BookGrid(books=keptBooks, prefix="download", downloads=downloads, menu=openBookMenu, playNow=play)
+                  if e.name == "item"
+                    column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" padding="8px 16px"
+                        button id="back" press=back aria-label="Back"
+                          image "symbol:back"
+                        text (detail.id == e.params.id ? detail.title : "") role="heading" aria-level=2 testId="detail-heading"
+                      if failed(detail)
+                        EmptyState(symbol="symbol:alert", title="Can’t Load This Book", message="The server didn’t answer.")
                       else
-                        EmptyState(symbol="symbol:play", title="Nothing Playing", message="Choose a book and press Play.")
-        // A mini player in glass over the page while a book plays and the player isn't shown.
-        if playing and top(nav).name != "player"
-          row position="absolute" bottom=16 left=16 right=16 max-width="40rem" margin="0 auto"
-            backgroundMaterial="glass" border-radius=18 padding="8px 12px" gap=12 align-items="center" testId="mini-player"
-            row press=openPlayer role="button" tabindex=0 aria-label=`Now Playing: ${nowTitle}` gap=10 align-items="center" flex=1 min-width=0 testId="mini-open"
-              image nowCover alt="" width=40 height=40 border-radius=6 object-fit="cover"
-              column flex=1 min-width=0 gap=1
-                text nowTitle font="-exact-subheadline" font-weight=600 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="mini-title"
-                text chapterTitle(chapters, chapter) font="-exact-footnote" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
-            button press=skip(-30) buttonStyle="glass" aria-label="Back 30 Seconds" testId="mini-back-30"
-              image "symbol:skip-back-30"
-            button press=toggle buttonStyle="prominent-glass" aria-label=(paused ? "Play" : "Pause") testId="mini-play-pause"
-              image (paused ? "symbol:play-fill" : "symbol:pause-fill")
-            button press=skip(30) buttonStyle="glass" aria-label="Forward 30 Seconds" testId="mini-forward-30"
-              image "symbol:skip-forward-30"
-            button press=toggleMiniWindow buttonStyle="glass" aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="mini-window-button"
-              image "symbol:icon.mini-player"
-      // The sidebar (AppKit's source list on a Mac, a sidebar in a wide browser window).
-      row role="tablist" aria-label="Audio Nook" display=(showSignIn ? "none" : "flex")
-        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=showTab("home") aria-keyshortcuts="Meta+1" testId="tab-home" flex=1
-          image "symbol:icon.headphones"
-          text "Listen Now"
-        button role="tab" aria-controls="panel-search" aria-selected=(nav.tab == "search") press=showTab("search") aria-keyshortcuts="Meta+2" testId="tab-search" flex=1
-          image "symbol:search"
-          text "Search"
-        button role="tab" aria-controls="panel-downloads" aria-selected=(nav.tab == "downloads") press=showTab("downloads") aria-keyshortcuts="Meta+3" testId="tab-downloads" flex=1
-          image "symbol:download"
-          text "Downloads"
-        for l, i in libraries key=l.id
-          button role="tab" aria-controls=`panel-library-${l.id}` aria-selected=(nav.tab == "library" and currentLibrary == l.id)
-            press=showLibrary(l.id) aria-keyshortcuts=(i < 6 ? `Meta+${i + 4}` : "") testId=`tab-library-${l.id}` flex=1
-            image "symbol:icon.books-vertical"
-            text l.name
+                        scroll id=`scroll-${e.id}` flex=1 min-height=0
+                          if detail.id == e.params.id
+                            ItemDetail(item=detail, play=play(detail.id), playFrom=playAt(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id),
+                              currentChapter=chapter, dlState=dlState(downloads, detail.id), dlProgress=dlProgress(downloads, detail.id),
+                              dlError=dlError(downloads, detail.id), dlBytes=dlBytes(downloads, detail.id), download=download(detail.id),
+                              removeDownload=removeKept(detail.id), starts=pending(dlStarted), finish=setFinished(detail.id, detail.progress >= 1),
+                              copyLink=copyItemLink(detail.id), menu=openBookMenu, playNow=play, downloads=downloads)
+                  if e.name == "player"
+                    column navigationKey=`${e.id}` navigationScroll="player-scroll" position="absolute" inset=0 display="flex" flex-direction="column"
+                      header display="flex" align-items="center" padding="8px 16px"
+                        button id="back" press=back aria-label="Back"
+                          image "symbol:back"
+                        text "Now Playing" role="heading" aria-level=2 flex=1
+                        button press=toggleMiniWindow aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="header-mini-window"
+                          image "symbol:icon.mini-player"
+                        button press=stopAndClose aria-label="Stop" testId="stop"
+                          image "symbol:stop"
+                      column flex=1 min-height=0 position="relative"
+                        if playing
+                          PlayerBackdrop(cover=nowCover)
+                          NowPlaying(title=nowTitle, author=nowAuthor, cover=nowCover, chapters=chapters, chapter=chapter, position=position,
+                            duration=duration, paused=paused, rate=rate, volume=volume, chaptersOpen=chaptersOpen, miniWindow=miniWindow,
+                            downloaded=dlState(downloads, nowItem), toggle=toggle, skip=skip, previousChapter=previousChapter, nextChapter=nextChapter,
+                            seek=seek, setRate=setRate, setVolume=setVolume, toggleChapters=toggleChapters, toggleMiniWindow=toggleMiniWindow,
+                            showBook=showNowBook, download=download(nowItem), finish=setFinished(nowItem, false), copyLink=copyItemLink(nowItem),
+                            stop=stopAndClose)
+                        else
+                          EmptyState(symbol="symbol:play", title="Nothing Playing", message="Choose a book and press Play.")
+          // While the sidebar is folded away, its now-playing card floats in glass over the page.
+          if playing and top(nav).name != "player" and not sidebarOpen
+            row position="absolute" bottom=16 left=16 right=16 max-width="40rem" margin="0 auto"
+              backgroundMaterial="glass" border-radius=18 padding="8px 12px" gap=12 align-items="center" testId="mini-player"
+              row press=openPlayer role="button" tabindex=0 aria-label=`Now Playing: ${nowTitle}` gap=10 align-items="center" flex=1 min-width=0 testId="mini-open"
+                image nowCover alt="" width=40 height=40 border-radius=6 object-fit="cover"
+                column flex=1 min-width=0 gap=1
+                  text nowTitle font="-exact-subheadline" font-weight=600 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="mini-title"
+                  text chapterTitle(chapters, chapter) font="-exact-footnote" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+              button press=skip(-30) buttonStyle="glass" aria-label="Back 30 Seconds" testId="mini-back-30"
+                image "symbol:skip-back-30"
+              button press=toggle buttonStyle="prominent-glass" aria-label=(paused ? "Play" : "Pause") testId="mini-play-pause"
+                image (paused ? "symbol:play-fill" : "symbol:pause-fill")
+              button press=skip(30) buttonStyle="glass" aria-label="Forward 30 Seconds" testId="mini-forward-30"
+                image "symbol:skip-forward-30"
+              button press=toggleMiniWindow buttonStyle="glass" aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="mini-window-button"
+                image "symbol:icon.mini-player"
       // The one player, beside the screens so it keeps playing while you browse.
       if playing and not showSignIn and urlOf(media, track) != ""
         audio urlOf(media, track) id="player-audio" paused=paused playbackRate=rate volume=volume
@@ -775,6 +849,9 @@ component App
           text "Previous Chapter"
         button press=nextChapter -exact-menu="view" aria-keyshortcuts="Alt+Meta+ArrowRight" disabled=(not playing or chapter + 1 >= chapters.length) aria-label="Next Chapter" testId="menu-next-chapter"
           text "Next Chapter"
+        button press=toggleSidebar -exact-menu="view" aria-keyshortcuts="Control+Meta+S" disabled=showSignIn
+          aria-label=(sidebarOpen ? "Hide Sidebar" : "Show Sidebar") testId="menu-sidebar"
+          text (sidebarOpen ? "Hide Sidebar" : "Show Sidebar")
         button press=findInLibrary aria-keyshortcuts="Meta+F" aria-label="Find in Library" testId="menu-find"
           text "Find in Library"
         // Space plays and pauses, as in Music, except on the Search page, where it types.

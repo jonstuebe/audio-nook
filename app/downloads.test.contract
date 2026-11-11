@@ -25,6 +25,7 @@ test "a book downloads a track at a time, plays with no network, and its progres
   expect state downloads.0 .state == "downloading"
   expect state downloads.0 .tracksTotal == 2
   expect text "download-state" == "Downloading 0%"
+  expect tree missing "row-downloads-count"
   clock +300
   clock data
   expect state downloads.0 .tracksDone == 1
@@ -33,6 +34,7 @@ test "a book downloads a track at a time, plays with no network, and its progres
   clock data
   expect state downloads.0 .state == "done"
   expect text "download-state" == "Downloaded"
+  expect text "row-downloads-count" == "1"
   expect tree has "download-badge"
   back
   clock settle
