@@ -125,9 +125,13 @@ jobs:
           path: |
             audio-nook/app/target
             audio-nook/app/.exact/shells
-          key: app-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
+          # The toolchain cache's key is part of this one: a build is only fresh over the same
+          # restored toolchain (its Hermes bundles' dates included). Fallbacks reuse the nearest
+          # older build: its registry crates and Swift objects still save most of the time.
+          key: app-build-v3-${{ steps.toolchain.outputs.cache-primary-key }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
           restore-keys: |
-            app-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-
+            app-build-v3-${{ steps.toolchain.outputs.cache-primary-key }}-
+            app-build-v3-
 
       - name: Set up Exact
         working-directory: exact
