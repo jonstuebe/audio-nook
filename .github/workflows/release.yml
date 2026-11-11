@@ -12,8 +12,7 @@ name: Release
 on:
   workflow_dispatch:
   push:
-    # ci-dmg: while this workflow is verified on its branch (workflow_dispatch needs it on main first).
-    branches: [main, ci-dmg]
+    branches: [main]
     tags: ['v*']
 
 permissions:

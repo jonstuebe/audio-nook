@@ -50,6 +50,11 @@ builds its Apple host for the machine it builds on, and the CI runner is Apple s
 
    After that it opens like any other app. A build signed with a Developer ID and notarized (see
    Releasing) needs neither step.
+
+   After installing a newer ad-hoc build over an older one, macOS may also ask whether Audio Nook
+   may use what it keeps in your keychain (your server's sign-in). Each ad-hoc build is a different
+   signature to the keychain, so click **Always Allow** (or sign in again). A Developer ID build
+   keeps one identity across updates and is never asked.
 4. Sign in with your Audiobookshelf server's address, username and password. Plain `http`
    addresses on your network or a tailnet work: the app allows them (App Transport Security is
    off for its own connections).
@@ -79,6 +84,18 @@ the toolchain on that commit, so a later run only rebuilds the app. It then runs
   the hardened runtime instead, notarizes the DMG with `notarytool`, and staples it.
 - **Exact's version:** the workflow's `EXACT_SHA` is the commit the app builds against. Bump it
   together with the local checkout (`git -C ../exact checkout <sha>`), and the caches follow.
+- **Build time:** a cold run (no caches) takes about 24 minutes: `exact setup` about 5, the
+  Contract compiler about 4, the release build about 13 (Exact's Rust crates with thin LTO, and the
+  Swift host). A warm run takes about 4 minutes, as the caches hold everything that build compiles.
+  - **Two caches:** Exact's toolchain (Rust toolchains, cargo's registry and tools, Hermes
+    bundles, Binaryen, Bun's packages, Exact's `target`, about 1.6 GB) is keyed on the Exact
+    commit, Xcode and the runner. The app's build (`app/target` and the generated native
+    workspace, about 0.6 GB) is keyed on that toolchain key and the app's sources.
+  - **Fixed mtimes:** checked-out files and directories get one fixed date, so Cargo and SwiftPM
+    see an unchanged source as unchanged.
+  - **Saving:** the toolchain is saved after the build, so it holds the build tools Exact
+    compiles. A failed setup is never cached, and setup retries network failures. When the
+    toolchain is restored, `exact setup --check` stands in for the full setup.
 - **What ships:** the production build (`mac --release`: production update trust, no development
   menu or hooks). `deploy.store.macos` is `"0"`, so the app is a plain binary with no update
   channel. The mock server and its address stay out of the app: `commands.server` and
