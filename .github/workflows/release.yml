@@ -108,7 +108,7 @@ jobs:
             ~/.bun/install/cache
             exact/node_modules
             exact/target
-          key: exact-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
+          key: exact-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
 
       # The app's own build: the generated workspace's crates and Swift build, keyed on the app's
       # sources too, falling back to the last build against the same Exact commit.
@@ -116,10 +116,14 @@ jobs:
         id: appbuild
         uses: actions/cache/restore@v4
         with:
-          path: audio-nook/app/target
-          key: app-build-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
+          # The generated native workspace too: regenerated, it would be newer than its build and
+          # relink the app (with LTO) every time; restored, the generator leaves unchanged files be.
+          path: |
+            audio-nook/app/target
+            audio-nook/app/.exact/shells
+          key: app-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
           restore-keys: |
-            app-build-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-
+            app-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-
 
       - name: Set up Exact
         working-directory: exact
@@ -133,6 +137,13 @@ jobs:
           set -euo pipefail
           rustup --version
           bun scripts/exact.mjs setup
+
+      # The Contract compiler (Exact's `contract` crate, built on first use into exact/target): built
+      # here so the toolchain cache holds it, and the app's Contract and TypeScript are checked
+      # before the long build.
+      - name: Build the Contract compiler and check the app
+        working-directory: audio-nook/app
+        run: bun exact.mjs contract build app.contract --json --errors-only
 
       # Saved as soon as setup has run, so a build that fails after it still leaves the toolchain.
       - name: Save Exact's toolchain
@@ -171,7 +182,9 @@ jobs:
         if: always() && steps.appbuild.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: audio-nook/app/target
+          path: |
+            audio-nook/app/target
+            audio-nook/app/.exact/shells
           key: ${{ steps.appbuild.outputs.cache-primary-key }}
 
       - name: Name the version
@@ -293,7 +306,7 @@ jobs:
         run: |
           set -euo pipefail
           ls -l "$DMG"
-          shasum -a 256 "$DMG" | tee "$DMG.sha256"
+          (cd "$(dirname "$DMG")" && shasum -a 256 "$DMG_NAME" | tee "$DMG_NAME.sha256")
           hdiutil imageinfo "$DMG" | grep -E 'Format|Checksum Type' || true
 
       - name: Upload the DMG
