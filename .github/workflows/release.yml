@@ -81,6 +81,9 @@ jobs:
           set -euo pipefail
           for repo in exact audio-nook; do
             (cd "$repo" && git ls-files -z | xargs -0 touch -h -t 200001010000)
+            # Directories too: a build script's rerun-if-changed may name one (exact-js watches
+            # Ibex's include directory), and a directory dated now looks newer than its build.
+            find "$repo" -path "$repo/.git" -prune -o -type d -print0 | xargs -0 touch -h -t 200001010000
           done
 
       - name: Set up Bun ${{ env.BUN_VERSION }}
@@ -108,7 +111,8 @@ jobs:
             ~/.bun/install/cache
             exact/node_modules
             exact/target
-          key: exact-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
+            exact/vendor/ibex/crates/hermes-lean-sys-installer/target
+          key: exact-toolchain-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
 
       # The app's own build: the generated workspace's crates and Swift build, keyed on the app's
       # sources too, falling back to the last build against the same Exact commit.
@@ -163,6 +167,7 @@ jobs:
             ~/.bun/install/cache
             exact/node_modules
             exact/target
+            exact/vendor/ibex/crates/hermes-lean-sys-installer/target
           key: ${{ steps.toolchain.outputs.cache-primary-key }}
 
       - name: Build the release app
