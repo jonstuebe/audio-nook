@@ -144,7 +144,7 @@ jobs:
         run: |
           set -euo pipefail
           find . -maxdepth 1 \( -name '*.contract' -o -name '*.ts' -o -name 'app.json' -o -name 'app.tamber' \) -exec touch {} +
-          find modules assets -exec touch {} +
+          find modules assets art -exec touch {} +
 
       - name: Set up Exact
         id: setup

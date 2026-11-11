@@ -5,6 +5,13 @@
   "id": "com.audionook.app",
   "start_url": "/",
   "display": "standalone",
+  "icons": [
+    {
+      "src": "art/app-icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ],
   "app": {
     "id": "com.audionook.app",
     "name": "Audio Nook"
