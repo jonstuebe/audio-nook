@@ -64,6 +64,8 @@ test "the Mini Player opens from the player, the mini player and ⌥⌘M, and st
   expect state miniShown == ""
   back
   clock settle
+  type "root" key "Control+Meta+s"
+  clock settle
   tap "mini-window-button"
   clock +300 real
   expect state miniWindow == true

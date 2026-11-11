@@ -11,6 +11,15 @@ icons
   icon.speaker-low = icon(sf "speaker.fill", svg "icons/speaker-low.svg")
   icon.speaker-high = icon(sf "speaker.wave.3.fill", svg "icons/speaker-high.svg")
   icon.chapters = icon(sf "list.bullet", svg "icons/chapters.svg")
+  icon.lib-database = icon(sf "cylinder.split.1x2", svg "icons/database.svg")
+  icon.lib-radio = icon(sf "radio", svg "icons/radio.svg")
+  icon.lib-podcast = icon(sf "antenna.radiowaves.left.and.right", svg "icons/podcast.svg")
+  icon.lib-rss = icon(sf "dot.radiowaves.up.forward", svg "icons/rss.svg")
+  icon.lib-music = icon(sf "music.note", svg "icons/music.svg")
+  icon.lib-power = icon(sf "bolt", svg "icons/power.svg")
+  icon.collections = icon(sf "rectangle.stack", svg "icons/collections.svg")
+  icon.playlist = icon(sf "music.note.list", svg "icons/playlist.svg")
+  icon.chevron-down = icon(sf "chevron.down", svg "icons/chevron-down.svg")
 
 // The Now Playing screen's paint over its backdrop, the cover blurred: a scrim that keeps text
 // readable, a track and its fill, the play button's disc and glyph, and quiet chips.
@@ -24,3 +33,6 @@ theme
   player.chip = light-dark(#1d1d1f14, #ffffff1f)
   player.chip-hover = light-dark(#1d1d1f24, #ffffff30)
   player.chip-on = light-dark(#1d1d1f2e, #ffffff3d)
+  sidebar.selection = light-dark(#0000000f, #ffffff1a)
+  sidebar.hover = light-dark(#00000008, #ffffff0d)
+  sidebar.field = light-dark(#0000000d, #ffffff14)

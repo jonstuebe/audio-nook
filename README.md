@@ -25,13 +25,14 @@ it says otherwise.
 | `app/miniplayer.test.contract` | The Mini Player window (macOS only) |
 | `app/modules/apple/MiniPlayer.swift`, `app/modules/web/index.js` | The app's native module: the Mini Player window (`nook-mini-player`) |
 | `app/tools/test-all.sh` | Every test file on web, macOS, and macOS under the platform's chrome, plus the window checks |
-| `app/sidebar.test.contract` | The Mac's own sidebar: rows and ⌃⌘S (macOS only, under `--chrome platform`) |
-| `app/tools/check-sidebar.mjs` | Drives the Mac app and reads the window: the sidebar's selection and collapse |
+| `app/sidebar.contract` | The sidebar, drawn after macOS 26's: search field, sections that fold, counts, library icons, Browse, playlists, the now-playing card and the account menu |
+| `app/sidebar.test.contract` | The sidebar's rows and selection, ↑/↓, ⌃⌘S, folding sections, counts, library icons, playlists, the account menu and dragging its width |
+| `app/tools/check-sidebar.mjs` | Drives the Mac app in its real window: the sidebar's selection, ↓, and ⌃⌘S folding it away and back |
 | `app/tools/screenshots.mjs` | Captures `docs/screenshots/*-{light,dark}.png` in the real window |
 | `app/mock/` | A mock Audiobookshelf server (Bun): fixture JSON, generated PNG covers and WAV tones |
 | `app/app.json` | The manifest: name, bundle id, hosts, ATS, the mock server as the app's test server |
 | `app/app.tamber`, `app/assets/icons/` | Icon tokens (SF Symbols on Apple, an SVG elsewhere): headphones, books, previous/next chapter, speakers, chapters list |
-| `docs/screenshots/` | macOS screens in light and dark: `library`, `search`, `detail`, `player`, `player-chapters` (wide, chapters open), `mini-player` and `sidebar-collapsed`, each with `-light.png` and `-dark.png` |
+| `docs/screenshots/` | macOS screens in light and dark: `library`, `search`, `detail`, `player`, `player-chapters` (wide, chapters open), `home-shelves`, `playlist`, `sidebar-playing` (a book playing, Browse folded) and `sidebar-collapsed`, each with `-light.png` and `-dark.png` |
 
 ## Install on a Mac
 
@@ -153,8 +154,7 @@ bun exact.mjs test web       # the web host, headless Chrome
 ```
 
 The same tests run through Exact's driver directly, from the Exact checkout. `--chrome platform`
-runs them under the Mac's real sidebar and toolbar (rows are pressed through AppKit's list), which
-`sidebar.test.contract` needs:
+runs them under the Mac's real toolbar and title bar:
 
 ```sh
 cd ../../exact
@@ -164,9 +164,9 @@ EXACT_APP_DIR=../audio-nook/app bun scripts/agent.mjs macos --app app --chrome p
 EXACT_APP_DIR=../audio-nook/app bun scripts/agent.mjs web --app app --test ../audio-nook/app/app.test.contract
 ```
 
-A test can't read the window itself, so `bun tools/check-sidebar.mjs` (in `app/`, after
-`bun exact.mjs mac`) drives the app and reads `state window`. It checks that each sidebar row
-selects its section, and that ⌃⌘S collapses the sidebar and brings it back with the same row
+`bun tools/check-sidebar.mjs` (in `app/`, after `bun exact.mjs mac`) drives the app in its real
+window. It checks that a row selects its section, that ↓ moves the selection, and that ⌃⌘S folds
+the sidebar away (the page then starts at the window's edge) and brings it back with the same row
 selected. `bun tools/screenshots.mjs` recaptures the screenshots.
 
 The tests cover:
@@ -176,13 +176,18 @@ The tests cover:
 - **Tokens:** ABS 3.x access and refresh tokens, and a legacy server's single token. An expired
   access token is refreshed without asking. A refresh the server refuses returns to the form, and
   signing in again resumes. Audio whose token expired renews it and loads again.
-- **Navigation:** the sidebar's Listen Now, Search and per-library rows switch sections. The chosen
-  library is remembered across a relaunch. On the Mac, ⌃⌘S collapses and restores the sidebar.
+- **Navigation:** the sidebar's rows switch sections; ↑ and ↓ move the selection; Browse opens
+  the library's Series, Authors and Collections; headers fold their sections, kept across a
+  relaunch; ⌃⌘S hides and shows the sidebar, and its edge drags it wider. The chosen library is
+  remembered across a relaunch.
+- **Sidebar:** counts (Listen Now's books in progress, Downloads' kept books) show and hide; each
+  library shows its ABS icon; playlists open their books as a grid or list, and an account without
+  any shows no Playlists section; the account menu names the user and server and signs out.
 - **Library:** the cover grid with progress, Continue Listening, and switching libraries.
 - **Search:** title matches in the chosen library, authors by name, and no results. Search follows
   the library chosen in the sidebar, and a result opens its detail.
-- **Mini player:** it shows while you browse other sections, plays, pauses and skips, and opens the
-  player.
+- **Now playing:** the sidebar's card shows while you browse other sections, plays and pauses,
+  and opens the player; with the sidebar hidden, a glass mini player over the page stands in.
 - **Detail** (both hosts): Dune's hero ("Book 1 of Dune Chronicles", the author link, "1m left",
   Continue) and the HTML description, whose More toggles. The Information grid's genres, year,
   publisher, language, ISBN, ASIN, length and size. The series and author links, the More in Dune
@@ -229,7 +234,7 @@ Launch the app and sign in with your server's address (`http://192.168.1.10:1337
 `https://abs.example.com`; a missing `http://` is added, and `http:/host` is read as
 `http://host`), your username and password. The
 address, access token, refresh token and username are kept in the Keychain (Exact's
-`secret.keep`), so a relaunch skips sign-in. Sign Out (the toolbar button on Listen Now) ends the
+`secret.keep`), so a relaunch skips sign-in. Sign Out (in the account menu at the sidebar's foot) ends the
 session on the server (`POST /logout` with `x-refresh-token`) and forgets the tokens.
 
 The data module may reach any `http:` or `https:` host (`net.fetch http:` / `https:`, because
@@ -245,19 +250,10 @@ colours and fonts.
 
 **Native (AppKit draws it):**
 
-- **Sidebar:** the root `tablist` becomes the window's sidebar. That is an `NSSplitViewController`
-  sidebar holding AppKit's source list, which is the macOS 26 floating glass sidebar running full
-  height with the traffic lights inset over it. It brings the toolbar's sidebar button with its
-  tracking separator, View ▸ Show Sidebar and ⌃⌘S. AppKit's autosave keeps its width and whether
-  you collapsed it across launches.
-- **Sidebar rows:** system row sizes, the native selection highlight, and SF Symbols in the accent
-  colour. The rows are Listen Now (`headphones`), Search (`magnifyingglass`), and one per ABS
-  library (`books.vertical`). Each library has a panel of its own, so the selected row is the
-  library whose books show.
 - **Toolbar and title bar:** each route's `header` becomes the unified toolbar. Its heading is the
-  window title, its buttons are toolbar items (Sign Out, Stop), and Back is the toolbar's own.
-- **Search field:** the Search route's `input type="search"` becomes the toolbar's `NSSearchField`.
-- **Liquid Glass:** the mini player and the player's chapters panel are
+  window title, its buttons are toolbar items (Stop, layouts, Sort, Filter), and Back is the
+  toolbar's own.
+- **Liquid Glass:** the sidebar, the collapsed-sidebar mini player and the player's chapters panel are
   `backgroundMaterial="glass"` (`NSGlassEffectView`). The mini player's buttons are
   `buttonStyle="glass"` and `"prominent-glass"`.
 - **Controls:** the `progress` bar and the sign-in form's grouped list are AppKit's. The player
@@ -294,11 +290,27 @@ colours and fonts.
 
 **Approximated (Exact has no such primitive yet):**
 
-- **Search field in the sidebar.** Exact's sidebar holds only rows, so search is a Search row whose
-  page has the toolbar's native search field, as Podcasts does.
-- **Sidebar section headers** ("Listen", "Library"). Exact's source list has no group rows, so the
-  rows are one flat list: Listen Now and Search first, then the libraries. Authors and Series rows
-  were left out for the same reason.
+- **The sidebar is drawn by the app** (`app/sidebar.contract`), not AppKit's source list. Exact's
+  own Mac sidebar (the root tablist as an `NSSplitViewController` source list) draws flat rows
+  only: a symbol, a title and a badge. Section headers that fold, the search field, the
+  now-playing card, the account footer and tinted glyphs need more, so the root tablist writes
+  `appearance="none"` and the app draws it after macOS 26's: a floating glass panel, 28-point
+  rows, the selection as a rounded pill, 13-point system type, accent-tinted SF Symbols, and
+  small secondary section headers whose chevron shows on hover. What that costs:
+  - It starts under the toolbar, where AppKit's runs the window's full height with the traffic
+    lights over it.
+  - There is no toolbar sidebar button. View ▸ Hide Sidebar (⌃⌘S) is the app's own command.
+  - The width is a drag on its edge (`pan`, 180–360 points, remembered), not an `NSSplitView`
+    divider with a resize cursor.
+  - The selection pill is the app's paint, not AppKit's (it does not dim when the window is
+    inactive). ↑ and ↓ move it while a row has the focus.
+  - The search field is drawn too: a capsule with the magnifier, a 6-point gap, a borderless
+    input and a clear button. Exact's own `NSSearchField` in the page sets its text from the
+    layout box, over the magnifier.
+  - Each tab row is a direct child of the tablist (Exact's rule for root tabs), so the Search
+    panel keeps an unseen tab, and the sidebar's field stands for it.
+- **Counts.** Listen Now's count is the books on ABS's Continue Listening shelf (up to 12), which
+  the home page already loads; Downloads' is the books kept on this Mac.
 - **Large titles.** The Mac toolbar has none ("there is no large title" in Exact's bar), so each
   page draws its title in `-exact-large-title` at the top of its content, as Books does under its
   toolbar. The toolbar shows the same title, small.
@@ -325,13 +337,12 @@ colours and fonts.
   `NSCollectionView`. Exact has no grid virtualization, so a very large library renders every card.
 - **Selection in the grid.** A cover is a link that opens the book. There is no
   keyboard-selectable collection item.
-- **Mini player placement.** It floats in glass over the page's foot. Exact has no
-  toolbar-accessory or window-bottom-bar API, which is where Music puts it.
+- **Now playing.** A card at the sidebar's foot, as Music's sidebar shows the playing item. With
+  the sidebar hidden, a glass mini player floats over the page's foot instead: Exact has no
+  toolbar-accessory or window-bottom-bar API, which is where Music puts it then.
 - **A second window.** Contract has no window of its own beyond the main one, so the Mini Player
   is a native module that owns an `NSPanel`. Its content is AppKit, not Contract. On the web the
   tag draws nothing, and the in-page mini player is the only one.
-- **Sidebar collapse in tests.** Contract tests can't read the window, so `tools/check-sidebar.mjs`
-  checks collapse through `state window`.
 
 ## How it works
 
@@ -349,8 +360,12 @@ colours and fonts.
   They come from the `trackUrls` resource. If the audio fails to load (an access token that expired
   mid-book), the player renews the token once, rebuilds the URL and resumes where it was. Covers
   need no auth in ABS (`Auth.js` `ignorePatterns`), so cover URLs carry no token and never expire.
-- **Library:** `GET /api/libraries` gives the sidebar's library rows. The chosen library is
-  remembered with `persist`.
+- **Library:** `GET /api/libraries` gives the sidebar's library rows, each with its `icon` (one of
+  the web client's `libraryIcons`, mapped to an SF Symbol; anything else is `books.vertical`).
+  The chosen library is remembered with `persist`.
+- **Playlists:** `GET /api/playlists` (PlaylistController.findAllForUser) gives the user's
+  playlists across libraries for the sidebar; `GET /api/playlists/:id` a playlist's page. Podcast
+  episodes in a playlist are left out.
   `GET /api/libraries/:id/items` lists its books, merged with `GET /api/me`'s `mediaProgress` for
   each book's progress. Covers are `/api/items/:id/cover`.
 - **A book's page:** `GET /api/items/:id?expanded=1&include=progress` gives
@@ -436,10 +451,11 @@ colours and fonts.
 | Feature | State |
 | --- | --- |
 | Sign in (server URL, username, password), kept across launches, sign out | Done |
-| Sidebar (Listen Now, Search, one row per library), collapsible, remembered | Done (native AppKit sidebar) |
+| Sidebar like Music's: search field, Listen Now and Downloads with counts, Libraries with their icons, Browse, Playlists, sections that fold, now-playing card, account menu; collapsible, resizable, ↑/↓ | Done (drawn by the app; see the look's approximations) |
+| Playlists | Done (`/api/playlists`, grid or list) |
 | Library cover grid with title, author, cover, progress | Done |
-| Search the chosen library | Done (toolbar search field on the Search page) |
-| Mini player while browsing | Done (Liquid Glass) |
+| Search the chosen library | Done (the sidebar's search field) |
+| Now playing while browsing | Done (the sidebar's card; a glass mini player when the sidebar is hidden) |
 | Listen Now shelves from ABS's personalized shelves | Done |
 | Series, Authors and Collections pages, with detail pages | Done |
 | Book detail like Apple Books: hero over a cover backdrop, links, glass actions and … menu, About with More, Information grid, chapters, series and author shelves | Done (backdrop is the blurred cover) |

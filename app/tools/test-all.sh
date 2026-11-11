@@ -12,9 +12,12 @@ bun exact.mjs mac >/dev/null || status=1
 for f in *.test.contract; do
   for run in "web" "macos" "macos --chrome platform"; do
     echo "== $run $f"
-    (cd "$EXACT" && bun scripts/agent.mjs $run --app app --test "$EXACT_APP_DIR/$f") 2>&1 | grep -v '^exact:' | grep -E '^test |passed|failed|^  ' || status=1
+    out=$(cd "$EXACT" && bun scripts/agent.mjs $run --app app --test "$EXACT_APP_DIR/$f" 2>&1) || status=1
+    printf '%s\n' "$out" | grep -v '^exact:' | grep -E '^test |passed|failed|^  '
+    printf '%s\n' "$out" | grep -q 'FAIL' && status=1
   done
 done
 echo "== tools/check-sidebar.mjs"
-bun tools/check-sidebar.mjs | tail -1 || status=1
+bun tools/check-sidebar.mjs > /tmp/check-sidebar.$$ 2>&1 || status=1
+tail -1 /tmp/check-sidebar.$$; rm -f /tmp/check-sidebar.$$
 exit $status

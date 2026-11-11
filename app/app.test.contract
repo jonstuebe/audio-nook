@@ -55,6 +55,8 @@ test "sign in lists the library and continue listening, a relaunch stays signed 
   expect state currentLibrary == "lib_kids"
   tap "tab-home"
   clock settle
+  tap "account"
+  clock settle
   tap "sign-out"
   clock data
   clock settle
@@ -200,6 +202,8 @@ test "a typed http:/ address is mended; an expired access token is refreshed wit
   expect text "book-title-li_gruffalo" == "The Gruffalo"
   tap "tab-home"
   clock settle
+  tap "account"
+  clock settle
   tap "sign-out"
   clock data
   clock settle
@@ -273,11 +277,10 @@ test "search finds books by title and authors by name in the chosen library"
   tap "sign-in-button"
   clock data
   clock settle
-  tap "tab-search"
-  clock settle
-  expect state nav.tab == "search"
   type "search" "the"
   clock data
+  clock settle
+  expect state nav.tab == "search"
   expect text "result-title-li_hobbit" == "The Hobbit"
   expect text "result-title-li_martian" == "The Martian"
   expect tree missing "result-li_dune"
@@ -293,10 +296,10 @@ test "search finds books by title and authors by name in the chosen library"
   tap "tab-library-lib_kids"
   clock data
   clock settle
-  tap "tab-search"
-  clock settle
   type "search" "the"
   clock data
+  clock settle
+  expect state nav.tab == "search"
   expect text "result-title-li_gruffalo" == "The Gruffalo"
   expect tree missing "result-li_hobbit"
   tap "result-li_gruffalo"
@@ -304,7 +307,7 @@ test "search finds books by title and authors by name in the chosen library"
   clock settle
   expect text "detail-title" == "The Gruffalo"
 
-test "the mini player keeps playing across the sidebar and opens the player"
+test "the sidebar's now-playing card keeps playing across the sections and opens the player; folded away, a mini player stands in"
   request POST "/__mock/reset" as reader
   clock data
   type "server" "http://127.0.0.1:13378"
@@ -313,6 +316,7 @@ test "the mini player keeps playing across the sidebar and opens the player"
   tap "sign-in-button"
   clock data
   clock settle
+  expect tree missing "now-card"
   tap "continue-li_dune"
   clock data
   clock settle
@@ -325,14 +329,22 @@ test "the mini player keeps playing across the sidebar and opens the player"
   tap "tab-library-lib_kids"
   clock data
   clock settle
-  expect text "mini-title" == "Dune"
-  tap "mini-play-pause"
+  expect text "now-card-title" == "Dune"
+  expect text "now-card-author" == "Frank Herbert"
+  expect tree missing "mini-player"
+  tap "now-card-play"
   expect state paused == false
-  tap "mini-play-pause"
+  tap "now-card-play"
   expect state paused == true
+  type "root" key "Control+Meta+s"
+  clock settle
+  expect state sidebarOpen == false
+  expect text "mini-title" == "Dune"
   tap "mini-forward-30"
   expect state track == 1
-  tap "mini-open"
+  type "root" key "Control+Meta+s"
+  clock settle
+  expect tree missing "mini-player"
+  tap "now-card-open"
   clock settle
   expect text "player-title" == "Dune"
-  expect tree missing "mini-player"

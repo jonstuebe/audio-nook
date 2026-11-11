@@ -7,10 +7,10 @@ export const PASSWORD = 'listen';
 export const LEGACY_TOKEN = 'mock-legacy-token-1234';
 
 export const LIBRARIES = [
-  { id: 'lib_books', name: 'Audiobooks', mediaType: 'book', displayOrder: 1, icon: 'audiobookshelf' },
-  { id: 'lib_kids', name: 'Kids', mediaType: 'book', displayOrder: 2, icon: 'audiobookshelf' },
+  { id: 'lib_books', name: 'Audiobooks', mediaType: 'book', displayOrder: 1, icon: 'headphones' },
+  { id: 'lib_kids', name: 'Kids', mediaType: 'book', displayOrder: 2, icon: 'rocket' },
   // Sixty generated books, so the library pages and loads lazily.
-  { id: 'lib_archive', name: 'Archive', mediaType: 'book', displayOrder: 3, icon: 'audiobookshelf' },
+  { id: 'lib_archive', name: 'Archive', mediaType: 'book', displayOrder: 3, icon: 'database' },
 ];
 
 type Book = {
@@ -102,6 +102,13 @@ export const AUTHORS = [
 // Collections (CollectionController): one in the Audiobooks library.
 export const COLLECTIONS = [
   { id: 'co_scifi', libraryId: 'lib_books', name: 'Sci-Fi Favorites', description: 'Deserts and red planets.', bookIds: ['li_dune', 'li_martian', 'li_messiah'] },
+];
+
+// Playlists (PlaylistController.findAllForUser): the reader's own, across libraries; the legacy
+// account has none.
+export const PLAYLISTS = [
+  { id: 'pl_roadtrip', userId: 'usr_mock', libraryId: 'lib_books', name: 'Road Trip', description: 'Long drives.', bookIds: ['li_martian', 'li_hobbit', 'li_dune'] },
+  { id: 'pl_bedtime', userId: 'usr_mock', libraryId: 'lib_kids', name: 'Bedtime', description: '', bookIds: ['li_gruffalo'] },
 ];
 
 // A cover is a flat PNG in the book's colour (Apple hosts don't draw SVG images).

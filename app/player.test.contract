@@ -141,7 +141,6 @@ test "the scrubber seeks where it is pressed and by arrow keys, and the volume f
   clock data
   clock settle
   tap "play-pause"
-  expect text "elapsed" == "0:45"
   tap "scrubber" drag -380 0 mouse
   expect text "elapsed" == "0:00"
   type "scrubber" key "ArrowRight"

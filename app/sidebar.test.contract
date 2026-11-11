@@ -1,13 +1,11 @@
-// The window's own sidebar (AppKit's source list), which only the Mac draws, and only under the
-// platform's chrome: `bun ../../exact/scripts/agent.mjs macos --app app --chrome platform --test
-// sidebar.test.contract` (with EXACT_APP_DIR set). Rows are pressed through AppKit's list, and
-// ⌃⌘S is View ▸ Show Sidebar. That the sidebar really collapses is read from the window, which a
-// test cannot see: tools/check-sidebar.mjs drives the same steps and reads `state window`.
+// Audio Nook's sidebar (sidebar.contract), drawn by the app on every host: its rows and their
+// selection, ↑/↓, ⌃⌘S, folding sections, counts, library icons, playlists, the account menu and
+// its width. tools/check-sidebar.mjs reads the same sidebar in the Mac's window.
 
 // A Mac window's size: the sidebar holds every row.
 size 1100x800
 
-test "the sidebar's rows switch sections, and the page stays while ⌃⌘S hides and shows it" on macos
+test "the rows switch sections, ↑ and ↓ move the selection, and ⌃⌘S hides and shows the sidebar"
   clock data
   type "server" "http://127.0.0.1:13378"
   type "username" "reader"
@@ -16,21 +14,179 @@ test "the sidebar's rows switch sections, and the page stays while ⌃⌘S hides
   clock data
   clock settle
   expect state nav.tab == "home"
+  expect state sidebarCurrent == "home"
   expect text "continue-title-li_dune" == "Dune"
   tap "tab-library-lib_kids"
   clock data
   clock settle
   expect state nav.tab == "library"
   expect state currentLibrary == "lib_kids"
+  expect state sidebarCurrent == "lib:lib_kids"
   expect text "book-title-li_gruffalo" == "The Gruffalo"
-  type "book-li_gruffalo" key "Control+Meta+s"
-  clock +600 real
-  expect text "book-title-li_gruffalo" == "The Gruffalo"
-  type "book-li_gruffalo" key "Control+Meta+s"
-  clock +600 real
-  tap "tab-search"
+  type "tab-library-lib_kids" key "ArrowDown"
+  clock data
   clock settle
-  expect state nav.tab == "search"
+  expect state sidebarCurrent == "lib:lib_archive"
+  type "tab-library-lib_archive" key "ArrowDown"
+  clock data
+  clock settle
+  expect state sidebarCurrent == "series"
+  expect state libraryView == "series"
+  type "browse-series" key "ArrowUp"
+  clock data
+  clock settle
+  expect state sidebarCurrent == "lib:lib_archive"
+  expect state libraryView == "books"
+  tap "tab-library-lib_kids"
+  clock data
+  clock settle
+  type "book-li_gruffalo" key "Control+Meta+s"
+  clock settle
+  expect state sidebarOpen == false
+  expect text "book-title-li_gruffalo" == "The Gruffalo"
+  type "book-li_gruffalo" key "Control+Meta+s"
+  clock settle
+  expect state sidebarOpen == true
+  expect state sidebarCurrent == "lib:lib_kids"
   type "search" "the"
   clock data
+  clock settle
+  expect state nav.tab == "search"
+  expect state sidebarCurrent == "search"
   expect text "result-title-li_gruffalo" == "The Gruffalo"
+
+test "Browse opens the library's series, authors and collections, and the headers fold their sections, kept across a relaunch"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "browse-authors"
+  clock data
+  clock settle
+  expect state nav.tab == "library"
+  expect state libraryView == "authors"
+  expect state sidebarCurrent == "authors"
+  expect tree has "view-authors"
+  tap "browse-collections"
+  clock data
+  clock settle
+  expect state libraryView == "collections"
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect state libraryView == "books"
+  expect state sidebarCurrent == "lib:lib_books"
+  expect state librariesOpen == true
+  tap "section-libraries"
+  expect state librariesOpen == false
+  tap "section-browse"
+  expect state browseOpen == false
+  expect state sidebarRows.2 == "pl:pl_roadtrip"
+  reload
+  clock data
+  clock settle
+  expect state librariesOpen == false
+  expect state browseOpen == false
+  tap "section-libraries"
+  tap "section-browse"
+  expect state librariesOpen == true
+  expect state browseOpen == true
+
+test "counts show what is in progress and hide when there is none, and each library shows its icon"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect text "row-home-count" == "1"
+  expect tree missing "row-downloads-count"
+  expect text "row-playlist-pl_roadtrip-count" == "3"
+  expect state libraries.0 .icon == "headphones"
+  expect state sidebarLibraries.0 .icon == "symbol:icon.headphones"
+  expect state sidebarLibraries.1 .icon == "symbol:sparkles"
+  expect state sidebarLibraries.2 .icon == "symbol:icon.lib-database"
+
+test "a playlist opens its books as a grid or a list, and a book from it opens its page"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect tree has "section-playlists"
+  tap "tab-playlist-pl_roadtrip"
+  clock data
+  clock settle
+  expect state nav.tab == "playlist"
+  expect state sidebarCurrent == "pl:pl_roadtrip"
+  expect text "page-title" == "Road Trip"
+  expect text "playlistbook-title-li_martian" == "The Martian"
+  expect text "playlistbook-title-li_dune" == "Dune"
+  tap "tab-playlist-pl_bedtime"
+  clock data
+  clock settle
+  expect text "page-title" == "Bedtime"
+  expect text "playlistbook-title-li_gruffalo" == "The Gruffalo"
+  tap "playlist-layout-button"
+  clock settle
+  expect state layout == "list"
+  tap "playlistbook-li_gruffalo"
+  clock data
+  clock settle
+  expect text "detail-title" == "The Gruffalo"
+  back
+  clock settle
+  tap "playlist-layout-button"
+  expect state layout == "grid"
+
+test "an account with no playlists shows no Playlists section"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "legacy"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect state playlists == []
+  expect tree missing "section-playlists"
+
+test "the account at the foot names the user and the server, copies its address and signs out"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect text "account-name" == "reader"
+  expect text "account-host" == "127.0.0.1:13378"
+  tap "account"
+  clock settle
+  tap "account-copy"
+  tap "account"
+  clock settle
+  tap "sign-out"
+  clock data
+  clock settle
+  expect tree has "sign-in"
+
+test "the sidebar's edge drags it wider and narrower, within bounds"
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  expect state sidebarWidth == 220
+  tap "sidebar-edge" drag 60 0 mouse
+  expect state sidebarWidth == 280
+  tap "sidebar-edge" drag -260 0 mouse
+  expect state sidebarWidth == 180
