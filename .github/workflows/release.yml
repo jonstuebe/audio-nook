@@ -112,7 +112,7 @@ jobs:
             exact/node_modules
             exact/target
             exact/vendor/ibex/crates/hermes-lean-sys-installer/target
-          key: exact-toolchain-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
+          key: exact-toolchain-v4-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
 
       # The app's own build: the generated workspace's crates and Swift build, keyed on the app's
       # sources too, falling back to the last build against the same Exact commit.
@@ -144,7 +144,13 @@ jobs:
         run: |
           set -euo pipefail
           rustup --version
-          bun scripts/exact.mjs setup
+          # Restored, everything setup installs is already here: check it (offline, changing
+          # nothing) and run the whole setup only if something is missing.
+          if [ "${{ steps.toolchain.outputs.cache-hit }}" = "true" ]; then
+            bun scripts/exact.mjs setup --check || bun scripts/exact.mjs setup
+          else
+            bun scripts/exact.mjs setup
+          fi
 
       # The Contract compiler (Exact's `contract` crate, built on first use into exact/target): built
       # here so the toolchain cache holds it, and the app's Contract and TypeScript are checked
@@ -152,27 +158,6 @@ jobs:
       - name: Build the Contract compiler and check the app
         working-directory: audio-nook/app
         run: bun exact.mjs contract build app.contract --json --errors-only
-
-      # Saved as soon as setup has run, so a build that fails after it still leaves the toolchain.
-      - name: Save Exact's toolchain
-        if: steps.toolchain.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.rustup/toolchains
-            ~/.rustup/update-hashes
-            ~/.rustup/settings.toml
-            ~/.cargo/bin
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/hermes-lean-sys
-            ~/.cache/exact
-            ~/.bun/install/cache
-            exact/node_modules
-            exact/target
-            exact/vendor/ibex/crates/hermes-lean-sys-installer/target
-          key: ${{ steps.toolchain.outputs.cache-primary-key }}
 
       - name: Build the release app
         working-directory: audio-nook/app
@@ -195,6 +180,28 @@ jobs:
             audio-nook/app/target
             audio-nook/app/.exact/shells
           key: ${{ steps.appbuild.outputs.cache-primary-key }}
+
+      # Saved after the build, which compiles Exact's own build tools into exact/target (the bake's
+      # helpers, the filesystem tool, Apple modules), and whether or not it passed.
+      - name: Save Exact's toolchain
+        if: always() && steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+            ~/.bun/install/cache
+            exact/node_modules
+            exact/target
+            exact/vendor/ibex/crates/hermes-lean-sys-installer/target
+          key: ${{ steps.toolchain.outputs.cache-primary-key }}
 
       - name: Name the version
         run: |
