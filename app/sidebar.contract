@@ -95,20 +95,28 @@ component Sidebar
     copyServer: action
     signOut: action
     resize: action
+  state searching = false
+  action searchFocused(on: bool)
+    searching = on
   view
     column aria-label="Sidebar" display=(open ? "flex" : "none") position="relative" width=width flex-shrink=0 margin="0 0 8px 8px"
       backgroundMaterial="glass" border-radius=16 overflow="hidden" testId="sidebar"
       // The search field, drawn as AppKit's: a magnifier, 6 points, then the text, and a clear
       // button once there is some. (Exact's own NSSearchField sets its text over the magnifier.)
+      // The bare field's own ring is a rectangle inside the pill, so it is off and the pill draws
+      // AppKit's ring instead, round, while the field holds the focus.
       row margin="14px 10px 10px" height=28 padding="0 6px 0 8px" gap=6 align-items="center" border-radius=999
-        background-color="sidebar.field" testId="search-box"
+        position="relative" background-color="sidebar.field" focusin=searchFocused(true) focusout=searchFocused(false) testId="search-box"
         image "symbol:search" font-size=13 color="-exact-secondary-label" aria-hidden=true
-        input type="search" appearance="none" id="search-field" value=query input=search submit=submitSearch placeholder="Search"
+        input type="search" appearance="none" outline="none" id="search-field" value=query input=search submit=submitSearch placeholder="Search"
           aria-label="Search" flex=1 min-width=0 font="-exact-body" testId="search"
         if query != ""
           button press=search("") appearance="none" display="flex" align-items="center" justify-content="center" width=18 height=18
             aria-label="Clear Search" color="-exact-secondary-label" testId="search-clear"
             image "symbol:close" font-size=11
+        if searching
+          column position="absolute" inset=-3 border="3px solid AccentColor" border-radius=999 opacity=0.5
+            pointer-events="none" aria-hidden=true testId="search-ring"
       // The rows: the root's tablist, every tab its direct child so each names its panel.
       scroll role="tablist" aria-label="Audio Nook" aria-orientation="vertical" appearance="none" key=keyed flex=1 min-height=0 testId="sidebar-rows"
         // Search's panel has a tab too, unseen: the field above stands for it.

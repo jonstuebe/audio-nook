@@ -54,6 +54,12 @@ test "the rows switch sections, ↑ and ↓ move the selection, and ⌃⌘S hide
   expect state nav.tab == "search"
   expect state sidebarCurrent == "search"
   expect text "result-title-li_gruffalo" == "The Gruffalo"
+  // The field draws no ring of its own inside the pill; the pill's round one shows while it is focused.
+  expect tree has "search-ring"
+  tap "tab-home"
+  clock data
+  clock settle
+  expect tree missing "search-ring"
 
 test "Browse opens the library's series, authors and collections, and the headers fold their sections, kept across a relaunch"
   clock data
