@@ -127,10 +127,13 @@ jobs:
           # The toolchain cache's key is part of this one: a build is only fresh over the same
           # restored toolchain (its Hermes bundles' dates included). Fallbacks reuse the nearest
           # older build: its registry crates and Swift objects still save most of the time.
-          key: app-build-v3-${{ steps.toolchain.outputs.cache-primary-key }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
+          key: app-build-v4-${{ steps.toolchain.outputs.cache-primary-key }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
+          # v3 builds may hold a stale bake saved by a failed build; they're only a fallback now,
+          # which the next step re-bakes over.
           restore-keys: |
+            app-build-v4-${{ steps.toolchain.outputs.cache-primary-key }}-
             app-build-v3-${{ steps.toolchain.outputs.cache-primary-key }}-
-            app-build-v3-
+            app-build-v4-
 
       # A fallback build was made from other app sources, but the fixed mtimes above make every
       # source look as old as it, so the bake would keep its stale assets (and the packager refuses
@@ -190,9 +193,10 @@ jobs:
           echo "APP_BUILT=$PWD/$app" >> "$GITHUB_ENV"
           lipo -info "$app/Contents/MacOS/Audio Nook"
 
-      # Saved whether or not the build passed: a failed build's compiled crates still help the next.
+      # Saved only after a passing build: a failed one saved under this exact key would be restored
+      # as a hit next time, skipping the re-bake above, and fail the same way again.
       - name: Save the app's build
-        if: always() && steps.build.outcome != 'skipped' && steps.appbuild.outputs.cache-hit != 'true'
+        if: steps.build.outcome == 'success' && steps.appbuild.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
