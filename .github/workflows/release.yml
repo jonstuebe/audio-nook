@@ -19,9 +19,10 @@ on:
 permissions:
   contents: write
 
+# A newer push to the same branch supersedes a run in progress; a tag's build always finishes.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   # The Exact commit this app is built against (README, "Set up Exact"). Bump it with the app.
@@ -30,6 +31,9 @@ env:
   # Exact pins Bun 1.4.2 (its package.json) and Xcode 27 (its Apple host does not build with 26).
   BUN_VERSION: 1.4.2
   XCODE_VERSION: '27.2'
+  # Release builds are not incremental; incremental state would only bloat the cached target dirs.
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
 
 jobs:
   macos:
@@ -69,6 +73,16 @@ jobs:
           ref: ${{ env.EXACT_SHA }}
           path: exact
 
+      # Cargo and SwiftPM decide what to rebuild by file mtimes, and a fresh checkout dates every file
+      # now, which would rebuild Exact's crates and the Swift host over a restored target dir. Every
+      # tracked file gets one fixed date instead, so an unchanged file matches its cached build.
+      - name: Give checked-out files a fixed mtime
+        run: |
+          set -euo pipefail
+          for repo in exact audio-nook; do
+            (cd "$repo" && git ls-files -z | xargs -0 touch -h -t 200001010000)
+          done
+
       - name: Set up Bun ${{ env.BUN_VERSION }}
         uses: oven-sh/setup-bun@v2
         with:
@@ -77,8 +91,9 @@ jobs:
       # Everything `exact setup` installs, keyed on the Exact commit: the pinned Rust toolchains,
       # cargo's registry and installed tools (wasm-bindgen), the Hermes bundles, Binaryen, Bun's
       # packages, and Exact's own target directory.
-      - name: Cache Exact's toolchain
-        uses: actions/cache@v4
+      - name: Restore Exact's toolchain
+        id: toolchain
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.rustup/toolchains
@@ -97,8 +112,9 @@ jobs:
 
       # The app's own build: the generated workspace's crates and Swift build, keyed on the app's
       # sources too, falling back to the last build against the same Exact commit.
-      - name: Cache the app's build
-        uses: actions/cache@v4
+      - name: Restore the app's build
+        id: appbuild
+        uses: actions/cache/restore@v4
         with:
           path: audio-nook/app/target
           key: app-build-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-${{ hashFiles('audio-nook/app/*.contract', 'audio-nook/app/*.ts', 'audio-nook/app/app.json', 'audio-nook/app/app.tamber', 'audio-nook/app/modules/**', 'audio-nook/app/assets/**') }}
@@ -118,6 +134,26 @@ jobs:
           rustup --version
           bun scripts/exact.mjs setup
 
+      # Saved as soon as setup has run, so a build that fails after it still leaves the toolchain.
+      - name: Save Exact's toolchain
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+            ~/.bun/install/cache
+            exact/node_modules
+            exact/target
+          key: ${{ steps.toolchain.outputs.cache-primary-key }}
+
       - name: Build the release app
         working-directory: audio-nook/app
         run: |
@@ -129,6 +165,14 @@ jobs:
           if [ -z "$app" ]; then echo "::error::the build made no Audio Nook.app"; exit 1; fi
           echo "APP_BUILT=$PWD/$app" >> "$GITHUB_ENV"
           lipo -info "$app/Contents/MacOS/Audio Nook"
+
+      # Saved whether or not the build passed: a failed build's compiled crates still help the next.
+      - name: Save the app's build
+        if: always() && steps.appbuild.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: audio-nook/app/target
+          key: ${{ steps.appbuild.outputs.cache-primary-key }}
 
       - name: Name the version
         run: |
