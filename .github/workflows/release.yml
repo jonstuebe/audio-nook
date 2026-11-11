@@ -112,7 +112,7 @@ jobs:
             exact/node_modules
             exact/target
             exact/vendor/ibex/crates/hermes-lean-sys-installer/target
-          key: exact-toolchain-v4-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
+          key: exact-toolchain-v5-${{ runner.os }}-${{ runner.arch }}-${{ env.EXACT_SHA }}-xcode${{ env.XCODE_VERSION }}
 
       # The app's own build: the generated workspace's crates and Swift build, keyed on the app's
       # sources too, falling back to the last build against the same Exact commit.
@@ -134,6 +134,7 @@ jobs:
             app-build-v3-
 
       - name: Set up Exact
+        id: setup
         working-directory: exact
         env:
           # Setup also installs Playwright's Chromium unless CHROME names a browser, and Android's
@@ -146,11 +147,18 @@ jobs:
           rustup --version
           # Restored, everything setup installs is already here: check it (offline, changing
           # nothing) and run the whole setup only if something is missing.
-          if [ "${{ steps.toolchain.outputs.cache-hit }}" = "true" ]; then
-            bun scripts/exact.mjs setup --check || bun scripts/exact.mjs setup
-          else
-            bun scripts/exact.mjs setup
+          if [ "${{ steps.toolchain.outputs.cache-hit }}" = "true" ] && bun scripts/exact.mjs setup --check; then
+            exit 0
           fi
+          # Setup downloads from GitHub, rustup and crates.io, and a runner's network sometimes
+          # refuses a connection. Setup is idempotent: another try fetches only what is missing.
+          for attempt in 1 2 3; do
+            if bun scripts/exact.mjs setup; then exit 0; fi
+            echo "::warning::exact setup failed (attempt $attempt of 3); trying again in 20 s"
+            sleep 20
+          done
+          echo "::error::exact setup failed three times"
+          exit 1
 
       # The Contract compiler (Exact's `contract` crate, built on first use into exact/target): built
       # here so the toolchain cache holds it, and the app's Contract and TypeScript are checked
@@ -160,6 +168,7 @@ jobs:
         run: bun exact.mjs contract build app.contract --json --errors-only
 
       - name: Build the release app
+        id: build
         working-directory: audio-nook/app
         run: |
           set -euo pipefail
@@ -173,7 +182,7 @@ jobs:
 
       # Saved whether or not the build passed: a failed build's compiled crates still help the next.
       - name: Save the app's build
-        if: always() && steps.appbuild.outputs.cache-hit != 'true'
+        if: always() && steps.build.outcome != 'skipped' && steps.appbuild.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -182,9 +191,10 @@ jobs:
           key: ${{ steps.appbuild.outputs.cache-primary-key }}
 
       # Saved after the build, which compiles Exact's own build tools into exact/target (the bake's
-      # helpers, the filesystem tool, Apple modules), and whether or not it passed.
+      # helpers, the filesystem tool, Apple modules), and whether or not that passed; never after a
+      # setup that failed, which would cache a partial install under the key of a whole one.
       - name: Save Exact's toolchain
-        if: always() && steps.toolchain.outputs.cache-hit != 'true'
+        if: always() && steps.setup.outcome == 'success' && steps.toolchain.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
