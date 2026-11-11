@@ -8,3 +8,19 @@ icons
   icon.mini-player = icon(sf "pip.enter", svg "icons/mini-player.svg")
   icon.grid = icon(sf "square.grid.2x2", svg "icons/grid.svg")
   icon.filter-on = icon(sf "line.3.horizontal.decrease.circle.fill", svg "icons/filter-on.svg")
+  icon.speaker-low = icon(sf "speaker.fill", svg "icons/speaker-low.svg")
+  icon.speaker-high = icon(sf "speaker.wave.3.fill", svg "icons/speaker-high.svg")
+  icon.chapters = icon(sf "list.bullet", svg "icons/chapters.svg")
+
+// The Now Playing screen's paint over its backdrop, the cover blurred: a scrim that keeps text
+// readable, a track and its fill, the play button's disc and glyph, and quiet chips.
+theme
+  player.scrim = light-dark(#f5f5f7a6, #0b0b0d99)
+  player.track = light-dark(#1d1d1f26, #ffffff33)
+  player.fill = light-dark(#1d1d1fd9, #ffffffeb)
+  player.tick = light-dark(#ffffffb3, #00000066)
+  player.disc = light-dark(#1d1d1f, #f5f5f7)
+  player.on-disc = light-dark(#ffffff, #1d1d1f)
+  player.chip = light-dark(#1d1d1f14, #ffffff1f)
+  player.chip-hover = light-dark(#1d1d1f24, #ffffff30)
+  player.chip-on = light-dark(#1d1d1f2e, #ffffff3d)

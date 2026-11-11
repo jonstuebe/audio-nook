@@ -12,6 +12,8 @@ it says otherwise.
 | `app/app.contract` | The view, its state and actions: sign-in, sidebar sections, cover grids, search, item detail, player, mini player |
 | `app/app.ts` | Every Audiobookshelf API call, and the sign-in kept in the Keychain |
 | `app/app.test.contract` | The tests, run against the mock server on every host |
+| `app/player.contract` | Now Playing: the cover backdrop, a drawn capsule scrubber and volume, the transport, the speed pill, the ••• menu and the chapters panel |
+| `app/player.test.contract` | The chapters panel, the speed pill, the ••• menu, scrubbing (drag and arrow keys) and volume |
 | `app/detail.contract` | The detail pages: a book's hero, About, Information, chapters and shelves; author, series and collection headers |
 | `app/text.ts` | ABS's HTML descriptions as plain paragraphs |
 | `app/detail.test.contract` | The book page's links, More, chapters, … menu and size; series, author and collection headers |
@@ -28,8 +30,8 @@ it says otherwise.
 | `app/tools/screenshots.mjs` | Captures `docs/screenshots/*-{light,dark}.png` in the real window |
 | `app/mock/` | A mock Audiobookshelf server (Bun): fixture JSON, generated PNG covers and WAV tones |
 | `app/app.json` | The manifest: name, bundle id, hosts, ATS, the mock server as the app's test server |
-| `app/app.tamber`, `app/assets/icons/` | Icon tokens (SF Symbols on Apple, an SVG elsewhere): headphones, books, previous/next chapter |
-| `docs/screenshots/` | macOS screens in light and dark: `library`, `search`, `detail`, `player`, `mini-player` and `sidebar-collapsed`, each with `-light.png` and `-dark.png` |
+| `app/app.tamber`, `app/assets/icons/` | Icon tokens (SF Symbols on Apple, an SVG elsewhere): headphones, books, previous/next chapter, speakers, chapters list |
+| `docs/screenshots/` | macOS screens in light and dark: `library`, `search`, `detail`, `player`, `player-chapters` (wide, chapters open), `mini-player` and `sidebar-collapsed`, each with `-light.png` and `-dark.png` |
 
 ## Install on a Mac
 
@@ -255,16 +257,23 @@ colours and fonts.
 - **Toolbar and title bar:** each route's `header` becomes the unified toolbar. Its heading is the
   window title, its buttons are toolbar items (Sign Out, Stop), and Back is the toolbar's own.
 - **Search field:** the Search route's `input type="search"` becomes the toolbar's `NSSearchField`.
-- **Liquid Glass:** the mini player is `backgroundMaterial="glass"` (`NSGlassEffectView`). The
-  player's transport and the mini player's buttons are `buttonStyle="glass"` and
-  `"prominent-glass"`, merged by `glassGroup`.
-- **Controls:** the `progress` bar, the speed `select` (an `NSPopUpButton`), the scrubber
-  (`NSSlider`), the filled Play button, and the sign-in form's grouped list.
+- **Liquid Glass:** the mini player and the player's chapters panel are
+  `backgroundMaterial="glass"` (`NSGlassEffectView`). The mini player's buttons are
+  `buttonStyle="glass"` and `"prominent-glass"`.
+- **Controls:** the `progress` bar and the sign-in form's grouped list are AppKit's. The player
+  draws its own, as Music does: a capsule scrubber and volume slider (pointer events and arrow
+  keys, `role="slider"` for VoiceOver), plain transport glyphs with hover and pressed states, a
+  filled play disc, and a speed pill that opens a native menu.
 - **Colours and type:** system semantic colours (`-exact-secondary-label`, `-exact-secondary-fill`,
   `AccentColor`) and text styles (`-exact-large-title`, `-exact-title2`, `-exact-subheadline`…).
   Light and dark follow the system, with no hard-coded colours except the covers' drop shadows.
 - **Now Playing:** the `audio` element is AVPlayer, with Media Session metadata for Control Center
-  and the media keys.
+  and the media keys. The screen sits over its cover, blurred and scaled past the edges, under a
+  scrim of the scheme (`player.*` tokens in `app.tamber`). Title, author and chapter are
+  left-aligned under the cover with a ••• menu (Go to Book, Download, Mark as Finished, Copy Link,
+  Stop Playing). The scrubber marks chapter boundaries and grows under the pointer. Below it:
+  volume, then speed, chapters and the Mini Player. Wide, the chapters are a glass panel beside the
+  player; narrow, under it.
 
 - **Mini Player window:** a separate `NSPanel` (Window ▸ Mini Player, ⌥⌘M, or the button on the
   mini player and in the player's toolbar) with an `NSGlassEffectView` behind cover art, title,
@@ -397,8 +406,8 @@ colours and fonts.
   the screens, so playback goes on while you browse.
   - Positions are in the book's time: a seek finds the track that holds it, loads it, and seeks on
     `loadedmetadata`. When a track ends, the next one starts.
-  - The scrubber, ±30 s, previous/next chapter, a chapter tap and speed (0.75×–2×) all work this
-    way.
+  - The scrubber (a drag, or ←/→ for 15 s), ±30 s, previous/next chapter, a chapter tap and
+    speed (0.75×–2×) all work this way. Volume is the `audio` element's, remembered.
   - It is the system's Now Playing app (media keys, Control Center).
 - **Downloads:** Download on a book's page plans the book with
   `GET /api/items/:id?expanded=1&include=progress`. It keeps the metadata, chapters, cover, track
@@ -442,7 +451,8 @@ colours and fonts.
 | Offline downloads: progress, cancel, delete, Downloads row, offline playback, queued sync | Done (progress per track, while the app runs) |
 | Continue Listening | Done (`/api/me/items-in-progress`) |
 | Item detail: title, author, narrator, description, duration, chapters | Done |
-| Playback: session, streaming, play/pause, ±30 s, chapters, scrubber, speed | Done |
+| Playback: session, streaming, play/pause, ±30 s, chapters, scrubber, speed, volume | Done |
+| Now Playing like Music: cover backdrop, drawn scrubber with chapter marks, play disc, speed pill, ••• menu, chapters panel | Done (backdrop is the blurred cover, not its dominant colour) |
 | Progress sync and close | Done (every 15 s while playing; close on stop) |
 
 ## Known gaps
@@ -455,6 +465,11 @@ colours and fonts.
   `TextAnswers.swift:213`).
 - **`verify`'s `contract verify` step fails inside Exact.** One of Exact's own crates
   (`semantics/difftest`) does not compile. The app's tests and screen checks in `verify` pass.
+- **Now Playing's backdrop stops at the toolbar.** A routed app's page can't extend under
+  Exact's unified toolbar, so the title bar keeps the window's own material above the blurred
+  cover.
+- **No colour from the cover.** Neither Contract nor app.ts can read an image's pixels, so the
+  backdrop is the blurred cover itself, not its dominant colour.
 - **The look's approximations** are listed under "The look: what is native and what is
   approximated" above.
 - **One page of items.** `libraryItems` asks for the whole library in one request (no `limit`).

@@ -1,0 +1,157 @@
+// The Now Playing screen (player.contract): its chapters panel, the speed pill, the ••• menu, the
+// drawn scrubber and the volume. Dune is 120 s in three chapters (0:00, 0:40, 1:20) and starts 45 s in.
+
+size 1100x800
+
+test "the chapters button shows and hides the chapters, beside the player when wide and under it when narrow"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  tap "play-pause"
+  expect text "play-state" == "Paused"
+  expect tree missing "chapters-panel"
+  expect state chaptersOpen == false
+  tap "player-chapters"
+  clock settle
+  expect tree has "chapters-panel"
+  expect state chaptersOpen == true
+  expect tree has "chapter-2"
+  tap "chapter-2"
+  expect text "player-chapter" == "Book Three: The Prophet"
+  expect text "elapsed" == "1:20"
+  resize 640x700
+  clock settle
+  expect tree has "chapters-panel"
+  tap "chapter-1"
+  expect text "elapsed" == "0:40"
+  tap "player-chapters"
+  clock settle
+  expect tree missing "chapters-panel"
+  expect state chaptersOpen == false
+
+test "the speed pill says the speed and its menu changes it"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect text "speed" == "1×"
+  tap "speed"
+  clock settle
+  tap "speed-1.75"
+  expect state rate == 1.75
+  expect text "speed" == "1.75×"
+  tap "speed"
+  clock settle
+  tap "speed-0.75"
+  expect state rate == 0.75
+  expect text "speed" == "0.75×"
+
+test "the ••• menu goes to the book, marks it finished and stops"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  tap "play-pause"
+  tap "player-more"
+  clock settle
+  tap "player-menu-copy"
+  tap "player-more"
+  clock settle
+  tap "player-menu-book"
+  clock data
+  clock settle
+  expect text "detail-title" == "Dune"
+  back
+  clock settle
+  expect text "player-title" == "Dune"
+  tap "player-more"
+  clock settle
+  tap "player-menu-finish"
+  clock data
+  clock settle
+  back
+  clock data
+  clock settle
+  expect text "detail-progress" == "Finished"
+  tap "play"
+  clock settle
+  tap "player-more"
+  clock settle
+  tap "player-menu-stop"
+  clock data
+  clock settle
+  expect state sessionId == ""
+
+test "the scrubber seeks where it is pressed and by arrow keys, and the volume follows its slider"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  tap "play-pause"
+  expect text "elapsed" == "0:45"
+  tap "scrubber" drag -380 0 mouse
+  expect text "elapsed" == "0:00"
+  type "scrubber" key "ArrowRight"
+  expect text "elapsed" == "0:15"
+  type "scrubber" key "ArrowRight"
+  expect text "elapsed" == "0:30"
+  type "scrubber" key "ArrowLeft"
+  expect text "elapsed" == "0:15"
+  expect state volume == 1
+  tap "volume" drag -380 0 mouse
+  expect state volume == 0
+  type "volume" key "ArrowRight"
+  expect state volume == 0.1
