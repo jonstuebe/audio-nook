@@ -7,6 +7,7 @@ use Book, BookPage, DownloadInfo, SeriesCard, AuthorCard, CollectionCard, Shelf,
 use clockText, lengthText, progressText, percentText, booksText, dlState, dlProgress, dlError from "./library.contract"
 use Chapter, Detail from "./detail.contract"
 use ItemDetail, AuthorHeader, GroupHeader, NumberedBooks from "./detail.contract"
+use NowPlaying, PlayerBackdrop from "./player.contract"
 use dlBytes from "./library.contract"
 use LargeTitle, BookGrid, BookList, SeriesBooks, SeriesGrid, AuthorGrid, CollectionGrid, ShelfRow, AuthorPhoto from "./library.contract"
 
@@ -114,6 +115,9 @@ component App
   // A seek the element hasn't finished: its time updates until then are from before it.
   state seeking = false
   state rate = 1
+  state volume = 1 persist
+  // The player's chapters: a panel beside it (or under it, narrow) that its Chapters button shows.
+  state chaptersOpen = false persist
   state lastSynced = 0
   // Renewals of the access token the audio URLs carry, and whether this load has already tried one.
   state tokenGen = 0
@@ -385,6 +389,14 @@ component App
       seek(chapterStart(chapters, chapter + 1))
   action setRate(v: string)
     rate = match parseNumber(v) { case some(n) => n, case none => 1 }
+  action setVolume(v: number)
+    volume = max(0, min(1, v))
+  action toggleChapters
+    chaptersOpen = not chaptersOpen
+  // The player's ••• menu: Go to Book.
+  action showNowBook
+    if nowItem != ""
+      nav = push(nav, path("item", nowItem))
 
   action syncNow
     if sessionId != ""
@@ -680,57 +692,26 @@ component App
                             removeDownload=removeKept(detail.id), starts=pending(dlStarted), finish=setFinished(detail.id, detail.progress >= 1),
                             copyLink=copyItemLink(detail.id), menu=openBookMenu, playNow=play, downloads=downloads)
                 if e.name == "player"
-                  column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                  column navigationKey=`${e.id}` navigationScroll="player-scroll" position="absolute" inset=0 display="flex" flex-direction="column"
                     header display="flex" align-items="center" padding="8px 16px"
                       button id="back" press=back aria-label="Back"
                         image "symbol:back"
                       text "Now Playing" role="heading" aria-level=2 flex=1
-                      button press=toggleMiniWindow aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="player-mini-window"
+                      button press=toggleMiniWindow aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") testId="header-mini-window"
                         image "symbol:icon.mini-player"
                       button press=stopAndClose aria-label="Stop" testId="stop"
                         image "symbol:stop"
-                    if playing
-                      scroll id=`scroll-${e.id}` flex=1 min-height=0
-                        column align-items="center" gap=18 padding="32px 32px 48px" max-width="36rem" margin="0 auto"
-                          image nowCover alt=nowTitle width=280 height=280 border-radius=14 object-fit="cover"
-                            box-shadow="0 12px 32px rgba(0, 0, 0, 0.25)" testId="player-cover"
-                          column align-items="center" gap=4 width="100%"
-                            text nowTitle font="-exact-title1" font-weight=700 text-align="center" testId="player-title"
-                            text nowAuthor font="-exact-title3" color="-exact-secondary-label" text-align="center" testId="player-author"
-                            text chapterTitle(chapters, chapter) color="-exact-secondary-label" text-align="center" testId="player-chapter"
-                          column gap=4 width="100%"
-                            input type="range" min=0 max=duration step=1 value=position change=scrubbed aria-label="Position" testId="scrubber"
-                            row justify-content="space-between"
-                              text clockText(position) font="-exact-caption1" font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="elapsed"
-                              text `-${clockText(max(0, duration - position))}` font="-exact-caption1" font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="remaining"
-                          row gap=14 align-items="center" justify-content="center" flex-wrap="wrap" padding="10px 16px"
-                            glassGroup=14
-                            button press=previousChapter buttonStyle="glass" aria-label="Previous Chapter" testId="prev-chapter"
-                              image "symbol:icon.backward-end-fill" font-size=20
-                            button press=skip(-30) buttonStyle="glass" aria-label="Back 30 Seconds" testId="back-30"
-                              image "symbol:skip-back-30" font-size=24
-                            button press=toggle buttonStyle="prominent-glass" aria-label=(paused ? "Play" : "Pause") testId="play-pause"
-                              image (paused ? "symbol:play-fill" : "symbol:pause-fill") font-size=34
-                            button press=skip(30) buttonStyle="glass" aria-label="Forward 30 Seconds" testId="forward-30"
-                              image "symbol:skip-forward-30" font-size=24
-                            button press=nextChapter buttonStyle="glass" aria-label="Next Chapter" disabled=(chapter + 1 >= chapters.length) testId="next-chapter"
-                              image "symbol:icon.forward-end-fill" font-size=20
-                          row gap=8 align-items="center" flex-wrap="wrap"
-                            text "Speed" color="-exact-secondary-label"
-                            select value=rate.toString() change=setRate aria-label="Speed" testId="speed"
-                              for r in ["0.75", "1", "1.25", "1.5", "1.75", "2"] key=r
-                                option `${r}×` value=r
-                            text (paused ? "Paused" : "Playing") font="-exact-footnote" color="-exact-secondary-label" testId="play-state"
-                          if chapters.length > 0
-                            column gap=0 width="100%" padding-top=8
-                              text "Chapters" font="-exact-title3" font-weight=700 padding-bottom=6
-                              for c in chapters key=c.id
-                                row press=seek(c.start) role="button" tabindex=0 aria-label=c.title gap=10 padding="9px 10px" border-radius=8
-                                  background-color=(c.id == chapter ? "-exact-secondary-fill" : "transparent") testId=`chapter-${c.id}`
-                                  text c.title flex=1 min-width=0 font-weight=(c.id == chapter ? 600 : 400)
-                                  text clockText(c.start) font-variant-numeric="tabular-nums" color="-exact-secondary-label"
-                    else
-                      EmptyState(symbol="symbol:play", title="Nothing Playing", message="Choose a book and press Play.")
+                    column flex=1 min-height=0 position="relative"
+                      if playing
+                        PlayerBackdrop(cover=nowCover)
+                        NowPlaying(title=nowTitle, author=nowAuthor, cover=nowCover, chapters=chapters, chapter=chapter, position=position,
+                          duration=duration, paused=paused, rate=rate, volume=volume, chaptersOpen=chaptersOpen, miniWindow=miniWindow,
+                          downloaded=dlState(downloads, nowItem), toggle=toggle, skip=skip, previousChapter=previousChapter, nextChapter=nextChapter,
+                          seek=seek, setRate=setRate, setVolume=setVolume, toggleChapters=toggleChapters, toggleMiniWindow=toggleMiniWindow,
+                          showBook=showNowBook, download=download(nowItem), finish=setFinished(nowItem, false), copyLink=copyItemLink(nowItem),
+                          stop=stopAndClose)
+                      else
+                        EmptyState(symbol="symbol:play", title="Nothing Playing", message="Choose a book and press Play.")
         // A mini player in glass over the page while a book plays and the player isn't shown.
         if playing and top(nav).name != "player"
           row position="absolute" bottom=16 left=16 right=16 max-width="40rem" margin="0 auto"
@@ -766,7 +747,7 @@ component App
             text l.name
       // The one player, beside the screens so it keeps playing while you browse.
       if playing and not showSignIn and urlOf(media, track) != ""
-        audio urlOf(media, track) id="player-audio" paused=paused playbackRate=rate
+        audio urlOf(media, track) id="player-audio" paused=paused playbackRate=rate volume=volume
           timeupdate=ticked loadedmetadata=loaded error=mediaFailed seeked=seekDone ended=trackEnded pause=hostPaused playing=hostPlaying
           metadata=MediaMetadata(title=nowTitle, artist=nowAuthor, album=chapterTitle(chapters, chapter), artwork=nowCover)
           seekbackwardOffset=30 seekforwardOffset=30 seekbackward=skip(-30) seekforward=skip(30)

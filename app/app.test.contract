@@ -125,10 +125,14 @@ test "play starts a session at the saved position, pauses, skips, changes chapte
   tap "prev-chapter"
   expect text "player-chapter" == "Book Two: Muad’Dib"
   expect text "elapsed" == "0:40"
+  tap "player-chapters"
+  clock settle
   tap "chapter-0"
   expect text "player-chapter" == "Book One: Dune"
   expect text "elapsed" == "0:00"
-  type "speed" "1.5"
+  tap "speed"
+  clock settle
+  tap "speed-1.5"
   expect state rate == 1.5
   tap "play-pause"
   expect state paused == false

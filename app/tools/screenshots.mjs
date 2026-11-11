@@ -18,6 +18,7 @@ const scenes = {
     'tap tab-search', 'clock settle', 'type search the', ...settle, 'shot search',
     'tap tab-library-lib_books', 'clock settle', 'tap book-li_dune', ...settle, 'shot detail',
     ...play, 'shot player',
+    'tap player-chapters', 'clock settle', 'clock +800 real', 'shot player-chapters', 'tap player-chapters', 'clock settle',
     'back', 'clock settle', 'back', ...settle, 'shot mini-player',
     'type book-li_dune key Control+Meta+s', 'clock +1200 real', 'shot sidebar-collapsed',
     'type book-li_dune key Control+Meta+s', 'clock +800 real',

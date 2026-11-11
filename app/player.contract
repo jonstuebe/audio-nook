@@ -1,0 +1,238 @@
+// Audio Nook's Now Playing screen, after Music's full-screen player and Apple Books': the cover
+// over a backdrop of itself, blurred; the title left-aligned under it with a ••• menu; a drawn
+// capsule scrubber; plain transport glyphs round a filled play disc; volume; and a quiet row of
+// speed, chapters and the Mini Player. Wide, the chapters sit in a glass panel beside it; narrow,
+// under it. app.contract places it and owns playback; this file only draws and asks.
+use Chapter from "./detail.contract"
+use clockText from "./library.contract"
+
+fn rateLabel(r: number): string = `${r}×`
+fn fraction(v: number, of: number): number = of > 0 ? max(0, min(1, v / of)) : 0
+fn percent(v: number, of: number): string = `${fraction(v, of) * 100}%`
+
+// A thin capsule slider, drawn: a track, its filled part and optional marks, no knob. It grows a
+// little under the pointer or a drag, and answers arrow keys a step at a time. `live` sends each
+// move of a drag; otherwise the value goes once, where the drag lets go.
+component Capsule
+  props
+    id: string
+    value: number
+    limit: number
+    step: number
+    label: string
+    valueText: string
+    marks: number[]
+    live: bool
+    rest: number
+    change: action
+  state hot = false
+  state dragging = false
+  state dragValue = 0
+  action hovered(on: bool)
+    hot = on
+  action down(e: PointerEvent)
+    let f = frame(id)
+    let v = f.width > 0 ? max(0, min(1, (e.clientX - f.x) / f.width)) * limit : value
+    dragging = true
+    dragValue = v
+    if live
+      change(v)
+  action moved(e: PointerEvent)
+    if dragging
+      let f = frame(id)
+      let v = f.width > 0 ? max(0, min(1, (e.clientX - f.x) / f.width)) * limit : dragValue
+      dragValue = v
+      if live
+        change(v)
+  action up(e: PointerEvent)
+    if dragging
+      dragging = false
+      change(dragValue)
+  action keyed(k: string)
+    if k == "ArrowRight" or k == "ArrowUp"
+      change(min(limit, value + step))
+    else if k == "ArrowLeft" or k == "ArrowDown"
+      change(max(0, value - step))
+  view
+    column id=id role="slider" tabindex=0 aria-label=label aria-valuenow=`${round(value)}` aria-valuetext=valueText
+      pointerdown=down pointermove=moved pointerup=up hover=hovered key=keyed
+      height=22 justify-content="center" width="100%" touch-action="none" testId=id
+      row position="relative" width="100%" height=((hot or dragging) ? rest + 4 : rest) border-radius=999
+        background-color="player.track" overflow="hidden" transition="height 160ms ease-out"
+        column position="absolute" left=0 top=0 bottom=0 width=percent(dragging ? dragValue : value, limit)
+          background-color="player.fill" border-radius=999 testId=`${id}-fill`
+        for m in marks key=m
+          column position="absolute" top=0 bottom=0 left=`${m * 100}%` width=2 background-color="player.tick"
+
+// One plain glyph of the transport: no chrome, a soft circle under the pointer, dimmer while held.
+component Glyph
+  props
+    symbol: string
+    label: string
+    size: number
+    press: action
+    disabled: bool
+    testId: string
+  view
+    button press=press disabled=disabled appearance="none" display="flex" align-items="center" justify-content="center" aria-label=label testId=testId
+      width=(size + 24) height=(size + 24) border-radius=999 color="-exact-label"
+      :hover
+        background-color="player.chip"
+      :active
+        opacity=0.55
+      image symbol font-size=size
+
+// The player's backdrop: the cover, blurred and scaled past the edges, under a scrim of the
+// scheme. It fills the whole screen, under the header too.
+component PlayerBackdrop
+  props
+    cover: string
+  view
+    column position="absolute" inset=0 overflow="hidden" aria-hidden=true
+      image cover alt="" position="absolute" top="-30%" left="-30%" width="160%" height="160%"
+        object-fit="cover" filter="blur(90px) saturate(1.7)" testId="player-backdrop"
+      column position="absolute" inset=0 background-color="player.scrim"
+
+component NowPlaying
+  props
+    title: string
+    author: string
+    cover: string
+    chapters: Chapter[]
+    chapter: number
+    position: number
+    duration: number
+    paused: bool
+    rate: number
+    volume: number
+    chaptersOpen: bool
+    miniWindow: bool
+    downloaded: string
+    toggle: action
+    skip: action
+    previousChapter: action
+    nextChapter: action
+    seek: action
+    setRate: action
+    setVolume: action
+    toggleChapters: action
+    toggleMiniWindow: action
+    showBook: action
+    download: action
+    finish: action
+    copyLink: action
+    stop: action
+  // The width the player has: two columns from about a laptop window's, one below it.
+  state width = 1000
+  action measured(w: number, h: number)
+    width = w
+  view
+    column position="absolute" inset=0 overflow="hidden" testId="now-playing"
+      column position="absolute" inset=0 resize=measured
+        scroll id="player-scroll" height="100%"
+          column min-height="100%" justify-content="center" padding=(width >= 860 ? "24px 40px 40px" : "16px 24px 40px")
+            row gap=40 justify-content="center" align-items="stretch" flex-wrap="wrap"
+              column gap=22 width="100%" max-width=(width >= 860 ? "25rem" : "26rem") flex="0 1 25rem"
+                image cover alt=title width="100%" aspect-ratio=1 border-radius=16 object-fit="cover"
+                  box-shadow="0 28px 60px rgba(0, 0, 0, 0.42)" testId="player-cover"
+                row gap=12 align-items="center"
+                  column gap=2 flex=1 min-width=0
+                    text title font="-exact-title2" font-weight=700 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="player-title"
+                    text author font="-exact-title3" color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="player-author"
+                    text (chapters.length > 0 ? match chapters.at(chapter) { case some(c) => c.title, case none => "" } : "") font="-exact-subheadline"
+                      color="-exact-secondary-label" white-space="nowrap" text-overflow="ellipsis" overflow="hidden" padding-top=2 testId="player-chapter"
+                  button popovertarget="player-menu" appearance="none" display="flex" align-items="center" justify-content="center" aria-label="More Actions" width=34 height=34 border-radius=999
+                    background-color="player.chip" color="-exact-label" testId="player-more"
+                    :hover
+                      background-color="player.chip-hover"
+                    image "symbol:ellipsis" font-size=15
+                column gap=2
+                  Capsule(id="scrubber", value=position, limit=duration, step=15, label="Position", valueText=`${clockText(position)} of ${clockText(duration)}`,
+                    marks=chapters.filter(c => c.start > 0).map(c => fraction(c.start, duration)), live=false, rest=6, change=seek)
+                  row justify-content="space-between"
+                    text clockText(position) font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="elapsed"
+                    text `-${clockText(max(0, duration - position))}` font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="remaining"
+                row gap=6 align-items="center" justify-content="space-between"
+                  Glyph(symbol="symbol:icon.backward-end-fill", label="Previous Chapter", size=18, press=previousChapter, disabled=false, testId="prev-chapter")
+                  Glyph(symbol="symbol:skip-back-30", label="Back 30 Seconds", size=28, press=skip(-30), disabled=false, testId="back-30")
+                  button press=toggle appearance="none" display="flex" align-items="center" justify-content="center" aria-label=(paused ? "Play" : "Pause") width=72 height=72 border-radius=999
+                    background-color="player.disc" color="player.on-disc" box-shadow="0 8px 24px rgba(0, 0, 0, 0.22)" testId="play-pause"
+                    :active
+                      -exact-press-scale=0.94
+                    image (paused ? "symbol:play-fill" : "symbol:pause-fill") font-size=30
+                  Glyph(symbol="symbol:skip-forward-30", label="Forward 30 Seconds", size=28, press=skip(30), disabled=false, testId="forward-30")
+                  Glyph(symbol="symbol:icon.forward-end-fill", label="Next Chapter", size=18, press=nextChapter, disabled=(chapter + 1 >= chapters.length), testId="next-chapter")
+                row gap=10 align-items="center"
+                  image "symbol:icon.speaker-low" font-size=12 color="-exact-secondary-label" aria-hidden=true
+                  Capsule(id="volume", value=volume, limit=1, step=0.1, label="Volume", valueText=`${round(volume * 100)}%`, marks=[], live=true, rest=4, change=setVolume)
+                  image "symbol:icon.speaker-high" font-size=12 color="-exact-secondary-label" aria-hidden=true
+                row align-items="center" justify-content="space-between" padding="0 4px"
+                  button popovertarget="speed-menu" appearance="none" display="flex" align-items="center" justify-content="center" aria-label=`Speed: ${rateLabel(rate)}` padding="4px 12px" border-radius=999
+                    background-color="player.chip" color="-exact-label" min-width="3.25rem" testId="speed"
+                    :hover
+                      background-color="player.chip-hover"
+                    text rateLabel(rate) font="-exact-subheadline" font-weight=600 font-variant-numeric="tabular-nums"
+                  button press=toggleChapters appearance="none" display="flex" align-items="center" justify-content="center" aria-label=(chaptersOpen ? "Hide Chapters" : "Show Chapters") aria-pressed=chaptersOpen
+                    disabled=(chapters.length == 0) width=36 height=32 border-radius=999 color="-exact-label"
+                    background-color=(chaptersOpen ? "player.chip-on" : "transparent") testId="player-chapters"
+                    :hover
+                      background-color="player.chip-hover"
+                    :active
+                      opacity=0.6
+                    image "symbol:icon.chapters" font-size=16
+                  button press=toggleMiniWindow appearance="none" display="flex" align-items="center" justify-content="center" aria-label=(miniWindow ? "Close Mini Player" : "Open Mini Player") aria-pressed=miniWindow
+                    width=36 height=32 border-radius=999 color="-exact-label"
+                    background-color=(miniWindow ? "player.chip-on" : "transparent") testId="player-mini-window"
+                    :hover
+                      background-color="player.chip-hover"
+                    :active
+                      opacity=0.6
+                    image "symbol:icon.mini-player" font-size=16
+                // What the play button says, for the tests and VoiceOver's rotor: playing or paused.
+                row position="absolute" width="0.0625rem" height="0.0625rem" overflow="hidden" opacity=0
+                  text (paused ? "Paused" : "Playing") testId="play-state"
+              if chaptersOpen and chapters.length > 0
+                column backgroundMaterial="glass" border-radius=22 padding="14px 10px" gap=2 flex=(width >= 860 ? "0 1 22rem" : "1 1 100%")
+                  max-width=(width >= 860 ? "22rem" : "26rem") max-height=(width >= 860 ? "46rem" : "none") testId="chapters-panel"
+                  row align-items="baseline" justify-content="space-between" padding="2px 10px 8px"
+                    text "Chapters" font="-exact-headline" role="heading" aria-level=3
+                    text `${chapters.length}` font="-exact-subheadline" color="-exact-secondary-label" font-variant-numeric="tabular-nums"
+                  scroll flex=1 min-height=0
+                    column gap=2
+                      for c in chapters key=c.id
+                        row press=seek(c.start) role="button" tabindex=0 aria-label=c.title aria-current=(c.id == chapter ? "true" : "false")
+                          gap=10 padding="9px 10px" border-radius=10 align-items="center"
+                          background-color=(c.id == chapter ? "player.chip-on" : "transparent") testId=`chapter-${c.id}`
+                          :hover
+                            background-color="player.chip"
+                          image "symbol:waveform" font-size=11
+                            color=(c.id == chapter ? "-exact-label" : "transparent") width=14 aria-hidden=true
+                          text c.title flex=1 min-width=0 font-weight=(c.id == chapter ? 600 : 400) white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+                          text clockText(c.start) font-variant-numeric="tabular-nums" color="-exact-secondary-label"
+      // The ••• menu: what the app already does with a book.
+      column id="player-menu" popover="auto" role="menu" aria-label="Now Playing"
+        button press=showBook popovertarget="player-menu" popovertargetaction="hide" testId="player-menu-book"
+          image "symbol:icon.books-vertical"
+          text "Go to Book"
+        if downloaded == "done"
+          button popovertarget="player-menu" popovertargetaction="hide" disabled=true testId="player-menu-download"
+            image "symbol:download"
+            text "Downloaded"
+        else
+          button press=download popovertarget="player-menu" popovertargetaction="hide" disabled=(downloaded == "downloading") testId="player-menu-download"
+            image "symbol:download"
+            text (downloaded == "downloading" ? "Downloading…" : "Download")
+        button press=finish popovertarget="player-menu" popovertargetaction="hide" testId="player-menu-finish"
+          image "symbol:checkmark"
+          text "Mark as Finished"
+        button press=copyLink popovertarget="player-menu" popovertargetaction="hide" testId="player-menu-copy"
+          image "symbol:link"
+          text "Copy Link"
+        button press=stop popovertarget="player-menu" popovertargetaction="hide" testId="player-menu-stop"
+          image "symbol:stop"
+          text "Stop Playing"
+      // Speed: Music's choices for spoken audio.
+      column id="speed-menu" popover="auto" role="menu" aria-label="Speed"
+        for r in [0.75, 1, 1.25, 1.5, 1.75, 2] key=r
+          button press=setRate(`${r}`) popovertarget="speed-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(rate == r) testId=`speed-${r}`
+            text rateLabel(r)
