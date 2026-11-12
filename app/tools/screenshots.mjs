@@ -25,7 +25,7 @@ const scenes = {
     'type root key Control+Meta+s', 'clock +800 real',
   ],
   'mini-player-window': [
-    'tap continue-li_dune', ...settle, ...play, 'tap player-mini-window', 'clock +2500 real', 'panel mini-player-window',
+    'tap continue-li_dune', ...settle, ...play, 'tap player-mini-window', 'clock +2500 real', 'shot mini-player-window',
   ],
   layouts: [
     ...settle, 'clock +1000 real', 'shot home-shelves',
@@ -56,11 +56,10 @@ for (const name of wanted) {
   if (!scenes[name]) { console.error(`no scene ${name}: ${Object.keys(scenes).join(', ')}`); process.exit(2); }
   for (const scheme of ['light', 'dark']) {
     const ops = [`prefer prefers-color-scheme ${scheme}`, 'resize 1180x780', 'clock data', ...signIn, ...scenes[name]].flatMap((op) =>
-      op.startsWith('shot ') ? [`screenshot ${out}${op.slice(5)}-${scheme}.png window`] :
-      op.startsWith('panel ') ? [`type mini-window snapshot:${out}${op.slice(6)}-${scheme}.png`] : [op]);
+      op.startsWith('shot ') ? [`screenshot ${out}${op.slice(5)}-${scheme}.png window`] : [op]);
     const run = spawnSync('bun', ['exact.mjs', 'agent', 'macos', '--chrome', 'platform', '--reset-storage', ...ops], { cwd: app, encoding: 'utf8' });
     const lines = `${run.stdout}\n${run.stderr}`.split('\n');
-    for (const l of lines.filter((l) => l.startsWith('screenshot ') || (l.includes('mini-window') && l.startsWith('typed')) || /error|refused/i.test(l))) console.log(l);
+    for (const l of lines.filter((l) => l.startsWith('screenshot ') || /error|refused/i.test(l))) console.log(l);
     if (run.status !== 0) process.exit(run.status ?? 1);
   }
 }

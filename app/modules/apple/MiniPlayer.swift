@@ -43,6 +43,7 @@ final class MiniPlayer: ExactNativeInstance {
         let toolbarVisible: Bool
         let movable: Bool
         let titlebarTransparent: Bool
+        let titleVisibility: NSWindow.TitleVisibility
     }
 
     private let anchor = Anchor(frame: .zero)
@@ -89,9 +90,10 @@ final class MiniPlayer: ExactNativeInstance {
     private func shrink(_ window: NSWindow) {
         full = Full(frame: window.frame, minSize: window.minSize, maxSize: window.maxSize, level: window.level,
                     toolbarVisible: window.toolbar?.isVisible ?? false, movable: window.isMovableByWindowBackground,
-                    titlebarTransparent: window.titlebarAppearsTransparent)
+                    titlebarTransparent: window.titlebarAppearsTransparent, titleVisibility: window.titleVisibility)
         window.toolbar?.isVisible = false
         window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { window.standardWindowButton(b)?.isHidden = true }
         window.isMovableByWindowBackground = true
         // The size is the player's, under the title bar the window keeps.
@@ -111,6 +113,7 @@ final class MiniPlayer: ExactNativeInstance {
         window.level = full.level
         window.isMovableByWindowBackground = full.movable
         window.titlebarAppearsTransparent = full.titlebarTransparent
+        window.titleVisibility = full.titleVisibility
         window.toolbar?.isVisible = full.toolbarVisible
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { window.standardWindowButton(b)?.isHidden = false }
         move(window, to: full.frame, animated: animated)
