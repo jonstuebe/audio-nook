@@ -44,6 +44,8 @@ const sessions = new Map<string, Session>();
 const progress = new Map<string, { currentTime: number; progress: number; lastUpdate: number }>();
 progress.set('li_dune', { currentTime: 45, progress: 45 / 120, lastUpdate: 1_700_000_000_000 });
 let nextSession = 1;
+// Batches still to answer 200 without applying, as ABS does when it can only log the update's error.
+let droppedBatches = 0;
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
@@ -214,7 +216,18 @@ async function route(req: Request): Promise<Response> {
       progress.set('li_dune', { currentTime: 45, progress: 45 / 120, lastUpdate: 1_700_000_000_000 });
       sessions.clear();
       nextSession = 1;
+      droppedBatches = 0;
       return json({ reset: true });
+    }
+    if (path === '/__mock/drop-batches' && method === 'POST') {
+      droppedBatches = Number(url.searchParams.get('n') ?? 1);
+      return json({ dropped: droppedBatches });
+    }
+    // Another device (the phone) listened on: `item` is now at `at` seconds.
+    if (path === '/__mock/listen' && method === 'POST') {
+      const item = url.searchParams.get('item') ?? '', at = Number(url.searchParams.get('at') ?? 0);
+      progress.set(item, { currentTime: at, progress: at / 120, lastUpdate: Date.now() });
+      return json({ item, at });
     }
     if (path === '/__mock/revoke' && method === 'POST') {
       for (const a of access.values()) a.expires = 0;
@@ -258,6 +271,10 @@ async function route(req: Request): Promise<Response> {
     if (path === '/api/me/progress/batch/update' && method === 'PATCH') {
       const items = (await req.json().catch(() => [])) as { libraryItemId?: string; currentTime?: number; progress?: number }[];
       if (!Array.isArray(items) || !items.length) return new Response('Missing request payload', { status: 400 });
+      if (droppedBatches > 0) {
+        droppedBatches--;
+        return new Response('OK');
+      }
       for (const it of items) if (it.libraryItemId && typeof it.currentTime === 'number') progress.set(it.libraryItemId, { currentTime: it.currentTime, progress: it.progress ?? 0, lastUpdate: Date.now() });
       counts.progressBatches++;
       return new Response('OK');
@@ -407,8 +424,9 @@ async function route(req: Request): Promise<Response> {
       const body = (await req.json().catch(() => ({}))) as { currentTime?: number; duration?: number };
       if (typeof body.currentTime === 'number') {
         s.currentTime = body.currentTime;
-        const duration = body.duration || 1;
-        progress.set(s.itemId, { currentTime: body.currentTime, progress: body.currentTime / duration, lastUpdate: Date.now() });
+        // PlaybackSessionManager.syncSession sends no isFinished, so a finished book stays finished.
+        const duration = body.duration || 1, was = progress.get(s.itemId);
+        progress.set(s.itemId, { currentTime: body.currentTime, progress: was && was.progress >= 1 ? 1 : body.currentTime / duration, lastUpdate: Date.now() });
       }
       if (m[2] === 'sync') s.syncs++; else s.closed = true;
       return new Response('OK');

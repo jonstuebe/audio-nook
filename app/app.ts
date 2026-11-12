@@ -585,6 +585,16 @@ const sources: Sources = {
     };
   },
 
+  // Where the server has this book now, which another device may have moved; 0 when it can't say.
+  serverPlace: async ([id], store) => {
+    try {
+      const p = (await api(store, `/api/me/progress/${encodeURIComponent(id)}`)) as Progress | null;
+      return { itemId: id, currentTime: num(p?.currentTime) };
+    } catch {
+      return { itemId: id, currentTime: 0 };
+    }
+  },
+
   syncSession: async ([sessionId, currentTime, timeListened, duration], store, storage): Promise<Reply> => {
     if (sessionId.startsWith('local:')) return keepLocal(store, storage, sessionId.slice(6), currentTime, duration);
     try {
