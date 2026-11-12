@@ -4,7 +4,7 @@
 // speed, chapters and the Mini Player. Wide, the chapters sit in a glass panel beside it; narrow,
 // under it. app.contract places it and owns playback; this file only draws and asks.
 use Chapter from "./detail.contract"
-use clockText from "./library.contract"
+use clockText, percentText from "./library.contract"
 
 fn rateLabel(r: number): string = `${r}×`
 // Speeds run 0.5× to 3× in twentieths, the finest step a listener can tell apart.
@@ -156,9 +156,11 @@ component NowPlaying
                 column gap=2
                   Capsule(id="scrubber", value=position, limit=duration, step=15, label="Position", valueText=`${clockText(position)} of ${clockText(duration)}`,
                     marks=chapters.filter(c => c.start > 0).map(c => fraction(c.start, duration)), live=false, rest=6, change=seek)
-                  row justify-content="space-between"
-                    text clockText(position) font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="elapsed"
-                    text `-${clockText(max(0, duration - position))}` font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="remaining"
+                  // Elapsed, how much of the book is listened to, and what is left.
+                  row align-items="baseline"
+                    text clockText(position) flex=1 font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="elapsed"
+                    text percentText(fraction(position, duration)) font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="listened"
+                    text `-${clockText(max(0, duration - position))}` flex=1 text-align="end" font="-exact-caption1" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="remaining"
                 row gap=6 align-items="center" justify-content="space-between"
                   Glyph(symbol="symbol:icon.backward-end-fill", label="Previous Chapter", size=18, press=previousChapter, disabled=false, testId="prev-chapter")
                   Glyph(symbol="symbol:skip-back-30", label="Back 30 Seconds", size=28, press=skip(-30), disabled=false, testId="back-30")
@@ -307,9 +309,10 @@ component MiniPlayer
           column gap=0 padding-top=4
             Capsule(id="mini-scrubber", value=position, limit=duration, step=15, label="Position", valueText=`${clockText(position)} of ${clockText(duration)}`,
               marks=[], live=false, rest=4, change=seek)
-            row justify-content="space-between"
-              text clockText(position) font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-elapsed"
-              text `-${clockText(max(0, duration - position))}` font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-remaining"
+            row align-items="baseline"
+              text clockText(position) flex=1 font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-elapsed"
+              text percentText(fraction(position, duration)) font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-listened"
+              text `-${clockText(max(0, duration - position))}` flex=1 text-align="end" font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-remaining"
           row align-items="center" justify-content="space-between"
             Glyph(symbol="symbol:icon.backward-end-fill", label="Previous Chapter", size=11, press=previousChapter, disabled=false, testId="mini-prev-chapter")
             Glyph(symbol="symbol:skip-back-30", label="Back 30 Seconds", size=16, press=skip(-30), disabled=false, testId="mini-back-30")
