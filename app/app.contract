@@ -7,7 +7,7 @@ use Book, BookPage, DownloadInfo, SeriesCard, AuthorCard, CollectionCard, Shelf,
 use clockText, lengthText, progressText, percentText, booksText, dlState, dlProgress, dlError from "./library.contract"
 use Chapter, Detail from "./detail.contract"
 use ItemDetail, AuthorHeader, GroupHeader, NumberedBooks from "./detail.contract"
-use NowPlaying, PlayerBackdrop from "./player.contract"
+use NowPlaying, PlayerBackdrop, MiniPlayer from "./player.contract"
 use Library, Sidebar, librarySymbol from "./sidebar.contract"
 use dlBytes from "./library.contract"
 use LargeTitle, BookGrid, BookList, SeriesBooks, SeriesGrid, AuthorGrid, CollectionGrid, ShelfRow, AuthorPhoto from "./library.contract"
@@ -138,8 +138,8 @@ component App
   state checkedFrom = 0
   // Renewals of the access token the audio URLs carry, and whether this load has already tried one.
   state tokenGen = 0
-  // The Mini Player window (the Mac's own panel, modules/apple/MiniPlayer.swift): whether it is
-  // open, whether it floats above other apps, and, under the agent, what it says it shows.
+  // The Mini Player: whether the window has shrunk into it (modules/apple/MiniPlayer.swift moves
+  // the window), whether it floats above other apps, and, under the agent, what the window is.
   state miniWindow = false
   state miniFloating = false persist
   state miniShown = ""
@@ -224,6 +224,8 @@ component App
   derive renewSignedOut = match renewed { case some(rr) => rr.error == "signed-out", case none => false }
   derive sessionEnded = session.ended or (session.signedIn and not pending(loggedIn) and (librariesCode == "signed-out" or booksCode == "signed-out" or continuingCode == "signed-out" or detailCode == "signed-out" or renewSignedOut))
   derive showSignIn = not session.signedIn or sessionEnded
+  // The window is the Mini Player: it draws that in place of the sidebar and the pages.
+  derive compact = miniWindow and playing and not showSignIn
   derive chapter = chapterAt(chapters, position)
 
   // A download moves a track per step while one is in progress.
@@ -530,27 +532,11 @@ component App
   // Window ▸ Mini Player (⌥⌘M), and the buttons on the mini player and the player.
   action toggleMiniWindow
     miniWindow = not miniWindow
-  // What the Mini Player window's controls say: the same actions as the main player's.
+  action toggleMiniFloating
+    miniFloating = not miniFloating
+  // What the window says it is, under the agent.
   action onMini(message: string)
-    if message == "toggle"
-      toggle()
-    else if message == "back30"
-      skip(-30)
-    else if message == "forward30"
-      skip(30)
-    else if message == "previous"
-      previousChapter()
-    else if message == "next"
-      nextChapter()
-    else if message == "float:on"
-      miniFloating = true
-    else if message == "float:off"
-      miniFloating = false
-    else if message == "closed"
-      miniWindow = false
-    else if message.startsWith("seek:")
-      seek(match parseNumber(message.slice(5)) { case some(n) => n, case none => position })
-    else if message.startsWith("shown:")
+    if message.startsWith("shown:")
       miniShown = message.slice(6)
 
   view
@@ -563,7 +549,12 @@ component App
       // sidebar marks the row of the library they show.
       // The sidebar beside the panels: one panel per sidebar row. A library's or a playlist's routes
       // live in its own panel, so the sidebar marks the row they show.
-      row flex=1 min-height=0 display=(showSignIn ? "none" : "flex")
+      // The pages stay where they are, unseen, while the window is the Mini Player.
+      if compact
+        MiniPlayer(title=nowTitle, author=nowAuthor, chapter=chapterTitle(chapters, chapter), cover=nowCover, position=position, duration=duration,
+          paused=paused, hasNext=(chapter + 1 < chapters.length), floating=miniFloating, toggle=toggle, skip=skip, previousChapter=previousChapter,
+          nextChapter=nextChapter, seek=seek, toggleFloating=toggleMiniFloating, expand=toggleMiniWindow)
+      row flex=1 min-height=0 display=(showSignIn or compact ? "none" : "flex")
         Sidebar(open=sidebarOpen, width=sidebarWidth, query=query, current=sidebarCurrent, libraries=sidebarLibraries, playlists=playlists,
           inProgress=inProgressCount, downloaded=downloadedCount, librariesOpen=librariesOpen, browseOpen=browseOpen, playlistsOpen=playlistsOpen,
           playing=playing, nowTitle=nowTitle, nowAuthor=nowAuthor, nowCover=nowCover, nowFraction=(duration > 0 ? position / duration : 0), paused=paused,
@@ -863,13 +854,9 @@ component App
           seekbackwardOffset=30 seekforwardOffset=30 seekbackward=skip(-30) seekforward=skip(30)
           previoustrack=previousChapter nexttrack=nextChapter
           width=0 height=0 position="absolute" testId="player-audio"
-      // The Mini Player window: a 1-point anchor here, the window AppKit's.
+      // What shrinks the window into the Mini Player and back: a 1-point anchor here.
       nook-mini-player id="mini-window" testId="mini-window" position="absolute" width=1 height=1
-        open=(miniWindow and playing and not showSignIn ? "true" : "false") floating=(miniFloating ? "true" : "false")
-        bookTitle=nowTitle author=nowAuthor chapter=chapterTitle(chapters, chapter) cover=nowCover
-        seconds=`${round(position)}` duration=`${duration}` elapsed=clockText(position) remaining=`-${clockText(max(0, duration - position))}`
-        state=(paused ? "paused" : "playing") hasNext=(chapter + 1 < chapters.length ? "true" : "false")
-        message=onMini
+        mini=(compact ? "true" : "false") floating=(miniFloating ? "true" : "false") message=onMini
       // Menu bar commands (the Mac files them in its menus; elsewhere they are plain buttons, kept out of sight).
       row position="absolute" width="0.0625rem" height="0.0625rem" overflow="hidden" opacity=0
         button press=toggleMiniWindow -exact-menu="window" aria-keyshortcuts="Alt+Meta+M" disabled=(not playing)

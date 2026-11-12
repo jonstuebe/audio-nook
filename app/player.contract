@@ -270,3 +270,68 @@ component NowPlaying
               :hover
                 background-color="player.chip-hover"
               text rateLabel(r) font="-exact-footnote" font-weight=600 font-variant-numeric="tabular-nums"
+
+// The Mini Player: the window itself, shrunk to the screen's corner (modules/apple/MiniPlayer.swift
+// moves it; app.contract shows this in place of the sidebar and the pages while it is small). Now
+// Playing in miniature: the cover over its own blur, the title, the chapter and the author, the
+// capsule scrubber, and the same plain glyphs round a smaller disc, with Keep on Top and the way
+// back to the full window at the end.
+component MiniPlayer
+  props
+    title: string
+    author: string
+    chapter: string
+    cover: string
+    position: number
+    duration: number
+    paused: bool
+    hasNext: bool
+    floating: bool
+    toggle: action
+    skip: action
+    previousChapter: action
+    nextChapter: action
+    seek: action
+    toggleFloating: action
+    expand: action
+  view
+    row flex=1 min-height=0 position="relative" overflow="hidden" testId="mini-window-view"
+      PlayerBackdrop(cover=cover)
+      row position="relative" flex=1 min-width=0 gap=14 align-items="center" padding="12px 16px 12px 14px"
+        image cover alt=title width=104 height=104 flex-shrink=0 border-radius=10 object-fit="cover"
+          box-shadow="0 10px 24px rgba(0, 0, 0, 0.32)" testId="mini-cover"
+        column flex=1 min-width=0 gap=2
+          text title font="-exact-headline" font-weight=700 white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="mini-window-title"
+          text (chapter == "" ? author : `${chapter} — ${author}`) font="-exact-footnote" color="-exact-secondary-label"
+            white-space="nowrap" text-overflow="ellipsis" overflow="hidden" testId="mini-window-detail"
+          column gap=0 padding-top=4
+            Capsule(id="mini-scrubber", value=position, limit=duration, step=15, label="Position", valueText=`${clockText(position)} of ${clockText(duration)}`,
+              marks=[], live=false, rest=4, change=seek)
+            row justify-content="space-between"
+              text clockText(position) font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-elapsed"
+              text `-${clockText(max(0, duration - position))}` font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="mini-remaining"
+          row align-items="center" justify-content="space-between"
+            Glyph(symbol="symbol:icon.backward-end-fill", label="Previous Chapter", size=11, press=previousChapter, disabled=false, testId="mini-prev-chapter")
+            Glyph(symbol="symbol:skip-back-30", label="Back 30 Seconds", size=16, press=skip(-30), disabled=false, testId="mini-back-30")
+            button press=toggle appearance="none" display="flex" align-items="center" justify-content="center" aria-label=(paused ? "Play" : "Pause") width=36 height=36 border-radius=999
+              background-color="player.disc" color="player.on-disc" box-shadow="0 4px 12px rgba(0, 0, 0, 0.22)" testId="mini-window-play-pause"
+              :active
+                -exact-press-scale=0.94
+              image (paused ? "symbol:play-fill" : "symbol:pause-fill") font-size=15
+            Glyph(symbol="symbol:skip-forward-30", label="Forward 30 Seconds", size=16, press=skip(30), disabled=false, testId="mini-forward-30")
+            Glyph(symbol="symbol:icon.forward-end-fill", label="Next Chapter", size=11, press=nextChapter, disabled=(not hasNext), testId="mini-next-chapter")
+            row gap=2
+              button press=toggleFloating appearance="none" display="flex" align-items="center" justify-content="center" aria-label="Keep on Top" aria-pressed=floating
+                width=28 height=26 border-radius=999 color="-exact-label" background-color=(floating ? "player.chip-on" : "transparent") testId="mini-float"
+                :hover
+                  background-color="player.chip-hover"
+                :active
+                  opacity=0.6
+                image "symbol:pin" font-size=12
+              button press=expand appearance="none" display="flex" align-items="center" justify-content="center" aria-label="Close Mini Player"
+                width=28 height=26 border-radius=999 color="-exact-label" testId="mini-expand"
+                :hover
+                  background-color="player.chip-hover"
+                :active
+                  opacity=0.6
+                image "symbol:icon.mini-player-exit" font-size=13
