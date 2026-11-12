@@ -173,11 +173,13 @@ component Sidebar
           row height=3 border-radius=999 background-color="sidebar.selection" overflow="hidden" aria-hidden=true
             column width=`${max(0, min(1, nowFraction)) * 100}%` background-color="-exact-secondary-label" border-radius=999 testId="now-card-progress"
       // The account: who is signed in where, and its menu.
-      button popovertarget="account-menu" appearance="none" display="flex" width=(width - 20) min-width=0 overflow="hidden" margin="0 10px 10px" padding="6px 8px" border-radius=8
+      button popovertarget="account-menu" appearance="none" display="flex" width=(width - 20) min-width=0 overflow="hidden" margin="0 10px 10px" border-radius=8
         aria-label=`Account: ${username} on ${host}` testId="account"
         :hover
           background-color="sidebar.hover"
-        row flex=1 gap=8 align-items="center" min-width=0
+        // The padding is the row's, not the button's: a button's width doesn't count its padding,
+        // so on the button it would push the row 16 points past the card above.
+        row flex=1 gap=8 align-items="center" min-width=0 padding="6px 8px"
           column width=24 height=24 border-radius=999 background-color="AccentColor" align-items="center" justify-content="center"
             text (username == "" ? "?" : username.slice(0, 1).toUpperCase()) font="-exact-caption1" font-weight=700 color="#ffffff"
           column flex=1 min-width=0 align-items="stretch"

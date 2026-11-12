@@ -22,8 +22,8 @@ it says otherwise.
 | `app/layouts.test.contract` | Shelves, sort, filter, grid/list, paging, series, authors, collections |
 | `app/offline.ts` | Offline listening: downloads into app storage, and progress queued for the server |
 | `app/downloads.test.contract` | Download, cancel, remove, play with no network, sync when back |
-| `app/miniplayer.test.contract` | The Mini Player window (macOS only) |
-| `app/modules/apple/MiniPlayer.swift`, `app/modules/web/index.js` | The app's native module: the Mini Player window (`nook-mini-player`) |
+| `app/miniplayer.test.contract` | The Mini Player: the window shrinking into it and back (macOS only) |
+| `app/modules/apple/MiniPlayer.swift`, `app/modules/web/index.js` | The app's native module: what shrinks the window into the Mini Player (`nook-mini-player`) |
 | `app/tools/test-all.sh` | Every test file on web, macOS, and macOS under the platform's chrome, plus the window checks |
 | `app/sidebar.contract` | The sidebar, drawn after macOS 26's: search field, sections that fold, counts, library icons, Browse, playlists, the now-playing card and the account menu |
 | `app/sidebar.test.contract` | The sidebar's rows and selection, ↑/↓, ⌃⌘S, folding sections, counts, library icons, playlists, the account menu and dragging its width |
@@ -209,10 +209,10 @@ The tests cover:
   opens and plays from `app:/data` files at the saved position, and its progress waits in the
   queue. When the server answers again, the queue is sent and the mock confirms the position.
   Cancelling mid-download and Remove Download both delete it.
-- **Mini Player window** (macOS): opens from the player, the mini player and ⌥⌘M. Its own buttons
-  (typed at it by the agent, which presses the real `NSButton`s) play, pause, skip, change chapter,
-  seek and float. It says back what it shows, which the test compares with the main player's state
-  in both directions.
+- **Mini Player** (macOS): the window shrinks into it from the player, the mini player and ⌥⌘M,
+  and grows back from its own button or ⌥⌘M. Its buttons play, pause, skip, change chapter and
+  float it. The window says back what it is (mini or full, floating or not, its size), which the
+  test checks at each step.
 - **Item detail:** author, narrator, description, length and chapters.
 - **Playback:** a session starts at the saved position. The test covers play/pause, ±30 s across
   a track boundary, next/previous chapter, a chapter tap and speed. It also checks that the server
@@ -271,13 +271,15 @@ colours and fonts.
   volume, then speed, chapters and the Mini Player. Wide, the chapters are a glass panel beside the
   player; narrow, under it.
 
-- **Mini Player window:** a separate `NSPanel` (Window ▸ Mini Player, ⌥⌘M, or the button on the
-  mini player and in the player's toolbar) with an `NSGlassEffectView` behind cover art, title,
-  chapter, an `NSSlider`, glass `NSButton`s (previous/next chapter, ±30 s, play/pause) and a pin
-  that floats it above other apps (`NSWindow.Level.floating`, remembered). It is the app's own
-  native module, `nook-mini-player` (`app/modules/apple/MiniPlayer.swift`). Contract gives it the
-  player's state as props and handles its buttons' messages, so it is always in step with the
-  main player. AppKit autosaves its position.
+- **Mini Player:** as picture in picture moves a video, the app's one window shrinks into a small
+  player at the screen's corner (Window ▸ Mini Player, ⌥⌘M, or the button on the mini player and
+  in the player) and grows back to where it was. Contract draws the small player in place of the
+  sidebar and the pages: Now Playing in miniature, the cover over its own blur, the capsule
+  scrubber, the same glyphs round a smaller disc, a pin that floats it above other apps
+  (`NSWindow.Level.floating`, remembered) and the way back. The app's own native module,
+  `nook-mini-player` (`app/modules/apple/MiniPlayer.swift`), only moves the window: it animates the
+  frame, hides the toolbar and title-bar buttons while small, remembers where the mini player sat,
+  and puts the full frame back before the app quits so the window reopens full size.
 
 - **Menus and keys:** a book's right-click menu (Play, Download / Remove Download, Mark as Finished
   / Not Finished, Show in its series) is an `NSMenu`. Playback is in the menu bar's View menu and the

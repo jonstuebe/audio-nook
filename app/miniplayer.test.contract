@@ -1,11 +1,12 @@
-// The Mini Player window: an `NSPanel` of the app's own native module (modules/apple/MiniPlayer.swift),
-// so a Mac's only. Typing at "mini-window" presses the panel's real buttons, and the panel says back
-// what it shows (`miniShown`: title | elapsed | playing or paused | floating or normal).
+// The Mini Player: the app's own window shrunk to the screen's corner by its native module
+// (modules/apple/MiniPlayer.swift), so a Mac's only, drawing the small player in place of the
+// sidebar and the pages. The window says back what it is (`miniShown`: mini or full | floating
+// or normal | its size).
 
 // A Mac window's size: the sidebar holds every row.
 size 1100x800
 
-test "the Mini Player opens from the player, the mini player and ⌥⌘M, and stays in step both ways" on macos
+test "the Mini Player shrinks the window from the player, the mini player and ⌥⌘M, and grows it back" on macos
   request POST "/__mock/reset" as reader
   clock data
   type "server" "http://127.0.0.1:13378"
@@ -25,43 +26,40 @@ test "the Mini Player opens from the player, the mini player and ⌥⌘M, and st
   clock +300 real
   expect state paused == true
   expect state miniWindow == false
+  expect state miniShown == "full|normal|1100x852"
   tap "player-mini-window"
   clock +500 real
   expect state miniWindow == true
-  expect state miniShown == "Dune|0:45|paused|normal"
-  type "mini-window" "forward30"
+  expect state miniShown == "mini|normal|440x136"
+  expect text "mini-window-title" == "Dune"
+  expect text "mini-elapsed" == "0:45"
+  tap "mini-forward-30"
   clock +300 real
-  expect text "elapsed" == "1:15"
+  expect text "mini-elapsed" == "1:15"
   expect state track == 1
-  expect state miniShown == "Dune|1:15|paused|normal"
-  tap "back-30"
+  tap "mini-back-30"
   clock +300 real
-  expect state miniShown == "Dune|0:45|paused|normal"
-  type "mini-window" "next"
+  expect text "mini-elapsed" == "0:45"
+  tap "mini-next-chapter"
   clock +300 real
-  expect text "player-chapter" == "Book Three: The Prophet"
-  type "mini-window" "previous"
+  expect text "mini-window-detail" == "Book Three: The Prophet — Frank Herbert"
+  tap "mini-prev-chapter"
   clock +300 real
-  expect text "player-chapter" == "Book Two: Muad’Dib"
-  type "mini-window" "seek:20"
-  clock +300 real
-  expect text "elapsed" == "0:20"
-  expect state miniShown == "Dune|0:20|paused|normal"
-  type "mini-window" "float"
+  expect text "mini-window-detail" == "Book Two: Muad’Dib — Frank Herbert"
+  tap "mini-float"
   clock +300 real
   expect state miniFloating == true
-  expect state miniShown == "Dune|0:20|paused|floating"
-  type "mini-window" "toggle"
+  expect state miniShown == "mini|floating|440x136"
+  tap "mini-window-play-pause"
   clock +300 real
   expect state paused == false
-  tap "play-pause"
+  tap "mini-window-play-pause"
   clock +300 real
   expect state paused == true
-  expect state miniShown == "Dune|0:20|paused|floating"
-  type "mini-window" "close"
+  tap "mini-expand"
   clock +300 real
   expect state miniWindow == false
-  expect state miniShown == ""
+  expect state miniShown == "full|normal|1100x852"
   back
   clock settle
   type "root" key "Control+Meta+s"
@@ -69,10 +67,8 @@ test "the Mini Player opens from the player, the mini player and ⌥⌘M, and st
   tap "mini-window-button"
   clock +300 real
   expect state miniWindow == true
-  type "mini-play-pause" key "Alt+Meta+m"
+  expect state miniShown == "mini|floating|440x136"
+  type "mini-window-play-pause" key "Alt+Meta+m"
   clock +300 real
   expect state miniWindow == false
-  type "mini-play-pause" key "Alt+Meta+m"
-  clock +300 real
-  expect state miniWindow == true
-  expect state miniShown == "Dune|0:20|paused|floating"
+  expect state miniShown == "full|normal|1100x852"
