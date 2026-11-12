@@ -136,6 +136,8 @@ test "play starts a session at the saved position, pauses, skips, changes chapte
   clock settle
   tap "speed-1.5"
   expect state rate == 1.5
+  tap "speed"
+  clock settle
   tap "play-pause"
   expect state paused == false
   expect text "play-state" == "Playing"

@@ -7,6 +7,8 @@ use Chapter from "./detail.contract"
 use clockText from "./library.contract"
 
 fn rateLabel(r: number): string = `${r}×`
+// Speeds run 0.5× to 3× in twentieths, the finest step a listener can tell apart.
+fn snapRate(r: number): number = max(0.5, min(3, round(r * 20) / 20))
 fn fraction(v: number, of: number): number = of > 0 ? max(0, min(1, v / of)) : 0
 fn percent(v: number, of: number): string = `${fraction(v, of) * 100}%`
 
@@ -126,6 +128,11 @@ component NowPlaying
   state width = 1000
   action measured(w: number, h: number)
     width = w
+  action nudgeRate(by: number)
+    setRate(`${snapRate(rate + by)}`)
+  // The slider's 0 is 0.5×.
+  action slideRate(v: number)
+    setRate(`${snapRate(v + 0.5)}`)
   view
     column position="absolute" inset=0 overflow="hidden" testId="now-playing"
       column position="absolute" inset=0 resize=measured
@@ -231,8 +238,35 @@ component NowPlaying
         button press=stop popovertarget="player-menu" popovertargetaction="hide" testId="player-menu-stop"
           image "symbol:stop"
           text "Stop Playing"
-      // Speed: Music's choices for spoken audio.
-      column id="speed-menu" popover="auto" role="menu" aria-label="Speed"
-        for r in [0.75, 1, 1.25, 1.5, 1.75, 2] key=r
-          button press=setRate(`${r}`) popovertarget="speed-menu" popovertargetaction="hide" role="menuitemradio" aria-checked=(rate == r) testId=`speed-${r}`
-            text rateLabel(r)
+      // Speed: a stepper of twentieths round the speed itself, a slider for big moves, and the
+      // common speeds one press away. It stays open, so a listener can tune it by ear.
+      column id="speed-menu" popover="auto" aria-label="Speed" position-area="top span-right"
+        width="17rem" padding=16 gap=14 testId="speed-panel"
+        row align-items="center" justify-content="space-between"
+          button press=nudgeRate(-0.05) appearance="none" display="flex" align-items="center" justify-content="center" aria-label="Slower" disabled=(rate <= 0.5)
+            width=36 height=36 border-radius=999 background-color="player.chip" color="-exact-label" testId="speed-down"
+            :hover
+              background-color="player.chip-hover"
+            :active
+              -exact-press-scale=0.92
+            image "symbol:minus" font-size=14
+          text rateLabel(rate) font="-exact-title2" font-weight=700 font-variant-numeric="tabular-nums" testId="speed-value"
+          button press=nudgeRate(0.05) appearance="none" display="flex" align-items="center" justify-content="center" aria-label="Faster" disabled=(rate >= 3)
+            width=36 height=36 border-radius=999 background-color="player.chip" color="-exact-label" testId="speed-up"
+            :hover
+              background-color="player.chip-hover"
+            :active
+              -exact-press-scale=0.92
+            image "symbol:add" font-size=14
+        column gap=4
+          Capsule(id="speed-slider", value=(rate - 0.5), limit=2.5, step=0.05, label="Speed", valueText=rateLabel(rate), marks=[0.2], live=true, rest=4, change=slideRate)
+          row justify-content="space-between"
+            text "0.5×" font="-exact-caption1" color="-exact-secondary-label"
+            text "3×" font="-exact-caption1" color="-exact-secondary-label"
+        row gap=6 justify-content="space-between"
+          for r in [1, 1.25, 1.5, 1.75, 2] key=r
+            button press=setRate(`${r}`) appearance="none" aria-pressed=(rate == r) flex=1 padding="5px 0" border-radius=999
+              background-color=(rate == r ? "player.chip-on" : "player.chip") color="-exact-label" testId=`speed-${r}`
+              :hover
+                background-color="player.chip-hover"
+              text rateLabel(r) font="-exact-footnote" font-weight=600 font-variant-numeric="tabular-nums"

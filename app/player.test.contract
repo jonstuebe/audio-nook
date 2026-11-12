@@ -43,7 +43,7 @@ test "the chapters button shows and hides the chapters, beside the player when w
   expect tree missing "chapters-panel"
   expect state chaptersOpen == false
 
-test "the speed pill says the speed and its menu changes it, kept across a relaunch"
+test "the speed pill says the speed, and its panel picks one or steps it a twentieth at a time, kept across a relaunch"
   request POST "/__mock/reset" as reader
   clock data
   type "server" "http://127.0.0.1:13378"
@@ -67,18 +67,17 @@ test "the speed pill says the speed and its menu changes it, kept across a relau
   tap "speed-1.75"
   expect state rate == 1.75
   expect text "speed" == "1.75×"
-  tap "speed"
-  clock settle
-  tap "speed-0.75"
-  expect state rate == 0.75
-  expect text "speed" == "0.75×"
-  tap "speed"
-  clock settle
-  tap "speed-1.75"
+  tap "speed-down"
+  expect state rate == 1.7
+  expect text "speed-value" == "1.7×"
+  tap "speed-up"
+  tap "speed-up"
+  expect state rate == 1.8
+  expect text "speed" == "1.8×"
   reload
   clock data
   clock settle
-  expect state rate == 1.75
+  expect state rate == 1.8
 
 test "the ••• menu goes to the book, marks it finished and stops"
   request POST "/__mock/reset" as reader
