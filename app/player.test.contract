@@ -33,11 +33,13 @@ test "the chapters button shows and hides the chapters, beside the player when w
   tap "chapter-2"
   expect text "player-chapter" == "Book Three: The Prophet"
   expect text "elapsed" == "1:20"
+  expect text "listened" == "67%"
   resize 640x700
   clock settle
   expect tree has "chapters-panel"
   tap "chapter-1"
   expect text "elapsed" == "0:40"
+  expect text "listened" == "33%"
   tap "player-chapters"
   clock settle
   expect tree missing "chapters-panel"

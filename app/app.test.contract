@@ -377,6 +377,7 @@ test "the sidebar's now-playing card keeps playing across the sections and opens
   clock settle
   expect text "now-card-title" == "Dune"
   expect text "now-card-author" == "Frank Herbert"
+  expect tree has "now-card-listened"
   expect tree missing "mini-player"
   tap "now-card-play"
   expect state paused == false

@@ -4,7 +4,7 @@
 // names its panel and the app's routes keep a stack per row; app.contract places it and answers
 // every row through `go`. Exact's own sidebar (AppKit's source list) draws rows only, so this one
 // is the app's: its glass, its selection, its fold and its width.
-use CollectionCard from "./library.contract"
+use CollectionCard, percentText from "./library.contract"
 
 // A server library; the sidebar is handed it with `icon` already its symbol (librarySymbol).
 shape Library
@@ -170,8 +170,10 @@ component Sidebar
               :hover
                 background-color="sidebar.hover"
               image (paused ? "symbol:play-fill" : "symbol:pause-fill") font-size=15
-          row height=3 border-radius=999 background-color="sidebar.selection" overflow="hidden" aria-hidden=true
-            column width=`${max(0, min(1, nowFraction)) * 100}%` background-color="-exact-secondary-label" border-radius=999 testId="now-card-progress"
+          row gap=8 align-items="center"
+            row flex=1 height=3 border-radius=999 background-color="sidebar.selection" overflow="hidden" aria-hidden=true
+              column width=`${max(0, min(1, nowFraction)) * 100}%` background-color="-exact-secondary-label" border-radius=999 testId="now-card-progress"
+            text percentText(max(0, min(1, nowFraction))) font="-exact-caption2" font-weight=500 font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="now-card-listened"
       // The account: who is signed in where, and its menu.
       button popovertarget="account-menu" appearance="none" display="flex" width=(width - 20) min-width=0 overflow="hidden" margin="0 10px 10px" border-radius=8
         aria-label=`Account: ${username} on ${host}` testId="account"

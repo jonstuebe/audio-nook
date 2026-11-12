@@ -33,6 +33,7 @@ test "the Mini Player shrinks the window from the player, the mini player and ‚å
   expect state miniShown == "mini|normal|440x136"
   expect text "mini-window-title" == "Dune"
   expect text "mini-elapsed" == "0:45"
+  expect text "mini-listened" == "38%"
   tap "mini-forward-30"
   clock +300 real
   expect text "mini-elapsed" == "1:15"
