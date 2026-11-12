@@ -9,7 +9,7 @@ use Chapter, Detail from "./detail.contract"
 use ItemDetail, AuthorHeader, GroupHeader, NumberedBooks from "./detail.contract"
 use NowPlaying, PlayerBackdrop, MiniPlayer from "./player.contract"
 use Library, Sidebar, librarySymbol from "./sidebar.contract"
-use dlBytes from "./library.contract"
+use dlBytes, liveBooks, liveShelves, liveEntries from "./library.contract"
 use LargeTitle, BookGrid, BookList, SeriesBooks, SeriesGrid, AuthorGrid, CollectionGrid, ShelfRow, AuthorPhoto from "./library.contract"
 
 // Three sidebar sections: Listen Now, Search, and the library a library row chose. A book's
@@ -195,7 +195,7 @@ component App
   mutation dlRemoved as shape Reply refreshes downloads
   mutation flushed as shape Pending refreshes pending, home, page
   derive activeDownload = match first(downloads.filter(d => d.state == "downloading")) { case some(d) => d.id, case none => "" }
-  derive keptBooks = downloads.map(d => Book(id=d.id, title=d.title, author=d.author, cover=d.cover, duration=d.duration, progress=d.listened, series=""))
+  derive keptBooks = liveBooks(downloads.map(d => Book(id=d.id, title=d.title, author=d.author, cover=d.cover, duration=d.duration, progress=d.listened, series="")), liveId, nowFraction)
   mutation renewed as shape Reply then afterRenew
   // A book's context menu: finished or not, and its series.
   mutation finishedSet as shape Reply refreshes home, page, detail, seriesPage, authorPage, collectionPage, results
@@ -216,6 +216,9 @@ component App
   derive nowItem = match started { case some(s) => s.itemId, case none => "" }
   resource media = trackUrls(tracks.map(t => t.path), tokenGen) as shape string[] else empty()
   derive position = offsetOf(tracks, track) + at
+  derive nowFraction = duration > 0 ? min(1, position / duration) : 0
+  // The book whose cards follow the player; none until the player has found its place.
+  derive liveId = position > 0 ? nowItem : ""
   // A refresh the server refused (app.ts forgot the sign-in): any read that met it shows the form.
   derive librariesCode = match failure(libraries) { case some(f) => f.code, case none => "" }
   derive booksCode = match failure(page) { case some(f) => f.code, case none => "" }
@@ -557,7 +560,7 @@ component App
       row flex=1 min-height=0 display=(showSignIn or compact ? "none" : "flex")
         Sidebar(open=sidebarOpen, width=sidebarWidth, query=query, current=sidebarCurrent, libraries=sidebarLibraries, playlists=playlists,
           inProgress=inProgressCount, downloaded=downloadedCount, librariesOpen=librariesOpen, browseOpen=browseOpen, playlistsOpen=playlistsOpen,
-          playing=playing, nowTitle=nowTitle, nowAuthor=nowAuthor, nowCover=nowCover, nowFraction=(duration > 0 ? position / duration : 0), paused=paused,
+          playing=playing, nowTitle=nowTitle, nowAuthor=nowAuthor, nowCover=nowCover, nowFraction=nowFraction, paused=paused,
           username=session.username, host=hostOf(session.server), search=sidebarSearch, submitSearch=submitSearch, go=go, keyed=sidebarKey,
           toggleSection=toggleSection, toggle=toggle, openPlayer=openPlayer, copyServer=copyServer, signOut=signOut, resize=resizeSidebar)
         column flex=1 min-width=0 min-height=0 position="relative" testId="panels"
@@ -584,7 +587,7 @@ component App
                               button press=showLibrary(currentLibrary) testId="empty-browse"
                                 text "Browse the Library"
                           else
-                            for sh in home.shelves key=sh.id
+                            for sh in liveShelves(home.shelves, liveId, nowFraction) key=sh.id
                               ShelfRow(shelf=sh, downloads=downloads, menu=openBookMenu, playNow=play)
                   if e.name == "search"
                     column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
@@ -611,7 +614,7 @@ component App
                             if results.books.length > 0
                               column gap=14
                                 text "Books" font="-exact-title2" font-weight=700
-                                BookGrid(books=results.books, prefix="result", downloads=downloads, menu=openBookMenu, playNow=play)
+                                BookGrid(books=liveBooks(results.books, liveId, nowFraction), prefix="result", downloads=downloads, menu=openBookMenu, playNow=play)
                   if e.name == "library"
                     column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                       // The toolbar: the library's title, its four views as segments, and for books the
@@ -686,9 +689,9 @@ component App
                               EmptyState(symbol="symbol:book", title="No Books", message="This library has no items yet.")
                             else
                               if layout == "list"
-                                BookList(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
+                                BookList(books=liveBooks(books, liveId, nowFraction), prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
                               else
-                                BookGrid(books=books, prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
+                                BookGrid(books=liveBooks(books, liveId, nowFraction), prefix="book", downloads=downloads, menu=openBookMenu, playNow=play)
                               // More as the end comes into view; the button for a reader who would rather press.
                               if books.length < page.total
                                 view intersect=loadMore height=1 testId="more-marker"
@@ -725,7 +728,7 @@ component App
                                   SeriesGrid(series=authorPage.series, prefix="authorseries")
                               column gap=14
                                 text "Books" font="-exact-title2" font-weight=700
-                                BookGrid(books=authorPage.books, prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                                BookGrid(books=liveBooks(authorPage.books, liveId, nowFraction), prefix="authorbook", downloads=downloads, menu=openBookMenu, playNow=play)
                   if e.name == "series"
                     column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                       header display="flex" align-items="center" padding="8px 16px"
@@ -742,7 +745,7 @@ component App
                           column
                             GroupHeader(kind="Series", name=seriesPage.name, covers=seriesPage.entries.slice(0, 3).map(x => x.book.cover),
                               facts=groupFacts(seriesPage.entries.map(x => x.book)), note="")
-                            NumberedBooks(entries=seriesPage.entries, prefix="series", numbered=true, menu=openBookMenu)
+                            NumberedBooks(entries=liveEntries(seriesPage.entries, liveId, nowFraction), prefix="series", numbered=true, menu=openBookMenu)
                   if e.name == "collection"
                     column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                       header display="flex" align-items="center" padding="8px 16px"
@@ -778,9 +781,9 @@ component App
                             if playlistPage.books.length == 0
                               EmptyState(symbol="symbol:icon.playlist", title="Empty Playlist", message="Add books to this playlist on your server.")
                             else if layout == "grid"
-                              BookGrid(books=playlistPage.books, prefix="playlistbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                              BookGrid(books=liveBooks(playlistPage.books, liveId, nowFraction), prefix="playlistbook", downloads=downloads, menu=openBookMenu, playNow=play)
                             else
-                              BookList(books=playlistPage.books, prefix="playlistbook", downloads=downloads, menu=openBookMenu, playNow=play)
+                              BookList(books=liveBooks(playlistPage.books, liveId, nowFraction), prefix="playlistbook", downloads=downloads, menu=openBookMenu, playNow=play)
                   if e.name == "downloads"
                     column navigationKey=`${e.id}` navigationScroll=`scroll-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
                       header display="flex" align-items="center" gap=8 padding="8px 16px"
@@ -804,6 +807,7 @@ component App
                         scroll id=`scroll-${e.id}` flex=1 min-height=0
                           if detail.id == e.params.id
                             ItemDetail(item=detail, play=play(detail.id), playFrom=playAt(detail.id), starting=pending(started), isCurrent=(nowItem == detail.id),
+                              listened=(liveId == detail.id and detail.progress < 1 ? nowFraction : detail.progress), place=(liveId == detail.id ? position : detail.currentTime),
                               currentChapter=chapter, dlState=dlState(downloads, detail.id), dlProgress=dlProgress(downloads, detail.id),
                               dlError=dlError(downloads, detail.id), dlBytes=dlBytes(downloads, detail.id), download=download(detail.id),
                               removeDownload=removeKept(detail.id), starts=pending(dlStarted), finish=setFinished(detail.id, detail.progress >= 1),

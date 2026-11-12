@@ -59,6 +59,9 @@ component ItemDetail
     playFrom: action
     starting: bool
     isCurrent: bool
+    // How much is listened to and where: the player's, while this book is in it.
+    listened: number
+    place: number
     currentChapter: number
     dlState: string
     dlProgress: number
@@ -106,14 +109,14 @@ component ItemDetail
               text `Narrated by ${item.narrator}` color="-exact-secondary-label" testId="detail-narrator"
             text factsLine(item) font="-exact-subheadline" color="-exact-secondary-label" testId="detail-meta"
             // Where the listener is: a slim bar and the time left, or finished.
-            if item.progress >= 1
+            if listened >= 1
               row gap=6 align-items="center" padding-top=4
                 image "symbol:checkmark" font-size=12 color="-exact-secondary-label"
                 text "Finished" font="-exact-subheadline" color="-exact-secondary-label" testId="detail-progress"
-            else if item.progress > 0
+            else if listened > 0
               row gap=10 align-items="center" padding-top=4
-                progress value=item.progress max=1 width="9rem" testId="detail-progress-bar"
-                text leftText(item.duration - item.currentTime) font="-exact-subheadline" color="-exact-secondary-label" testId="detail-progress"
+                progress value=listened max=1 width="9rem" testId="detail-progress-bar"
+                text leftText(item.duration - place) font="-exact-subheadline" color="-exact-secondary-label" testId="detail-progress"
             // Books' actions: a filled accent capsule, quiet tinted capsules, a round ••• button.
             row gap=10 align-items="center" flex-wrap="wrap" padding-top=14
               button press=play disabled=starting appearance="none" display="flex" align-items="center" gap=6 height=34 padding="0 18px" border-radius=999
