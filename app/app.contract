@@ -63,6 +63,11 @@ shape Track
   duration: number
   path: string
 
+// What the server holds as a book's place: another device may have moved it on.
+shape Place
+  itemId: string
+  currentTime: number
+
 shape PlaySession
   id: string
   itemId: string
@@ -128,6 +133,8 @@ component App
   // The player's chapters: a panel beside it (or under it, narrow) that its Chapters button shows.
   state chaptersOpen = false persist
   state lastSynced = 0
+  // What we had last told the server when we asked it for the book's place.
+  state checkedFrom = 0
   // Renewals of the access token the audio URLs carry, and whether this load has already tried one.
   state tokenGen = 0
   // The Mini Player window (the Mac's own panel, modules/apple/MiniPlayer.swift): whether it is
@@ -176,6 +183,7 @@ component App
   mutation loggedIn as shape Reply refreshes session, libraries, page, home, detail
   mutation loggedOut as shape Reply refreshes session
   mutation started as shape PlaySession then afterStart
+  mutation placeChecked as shape Place then afterPlaceCheck
   mutation synced as shape Reply queue refreshes pending
   mutation closed as shape Reply queue refreshes home, page, detail, pending, downloads
   // Downloads: what is kept, one track fetched per step, and progress waiting for the server.
@@ -362,6 +370,8 @@ component App
 
   action play(id: string)
     if nowItem == id
+      if paused
+        checkPlace()
       paused = false
       openPlayer()
     else
@@ -385,14 +395,23 @@ component App
       case none
         paused = true
 
+  // Pausing tells the server where we stopped; resuming asks it whether another device went on
+  // (and sends nothing first, which would overwrite that device's place with ours).
   action toggle
     let next = not paused
     paused = next
-    if not next
+    if next
       syncNow()
+    else
+      checkPlace()
+  // Media keys, headphones and Control Center pause and play the element itself.
   action hostPaused
-    paused = true
+    if not paused
+      paused = true
+      syncNow()
   action hostPlaying
+    if paused
+      checkPlace()
     paused = false
   action ticked(t: number)
     if not seeking
@@ -466,6 +485,22 @@ component App
     if sessionId != ""
       send synced = syncSession(sessionId, position, max(0, min(position - lastSynced, 60)), duration)
       lastSynced = position
+  // Not while a sync is on its way: the server's answer would be from before it.
+  action checkPlace
+    if nowItem != "" and not pending(placeChecked) and not pending(synced)
+      checkedFrom = lastSynced
+      send placeChecked = serverPlace(nowItem)
+  // A place more than a few seconds past the one we last told the server was listened to
+  // elsewhere: go on from there. (Measured from what we sent, not where we are, so a seek back
+  // while paused isn't undone; and dropped if we have synced since asking.)
+  action afterPlaceCheck
+    match placeChecked
+      case some(p)
+        if p.itemId == nowItem and lastSynced == checkedFrom and p.currentTime > lastSynced + 5 and max(p.currentTime - position, position - p.currentTime) > 5 and p.currentTime < duration
+          seek(p.currentTime)
+          lastSynced = p.currentTime
+      case none
+        lastSynced = lastSynced
   action closeCurrent
     if sessionId != ""
       send closed = closeSession(sessionId, position, max(0, min(position - lastSynced, 60)), duration)

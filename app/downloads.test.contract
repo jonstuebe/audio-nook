@@ -70,10 +70,49 @@ test "a book downloads a track at a time, plays with no network, and its progres
   expect state paused == true
   expect state pending.count == 1
   pass fetch "http://127.0.0.1:13378"
-  tap "play-pause"
+  clock +30000
   clock data
   expect state pending.count == 0
   request GET "/__mock/progress?item=li_dune&at=70" as reader
+
+test "progress the server answers 200 for but doesn't keep stays queued and is sent again"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "download"
+  clock data
+  clock +300
+  clock data
+  clock +300
+  clock data
+  expect state downloads.0 .state == "done"
+  tap "play"
+  clock data
+  clock settle
+  expect state sessionId == "local:li_dune"
+  clock +600 real
+  tap "forward-30"
+  clock +300 real
+  request POST "/__mock/drop-batches?n=1" as reader
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 1
+  clock +30000
+  clock data
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=70&batches=1" as reader
 
 test "a download can be cancelled, and a downloaded book removed"
   clock data

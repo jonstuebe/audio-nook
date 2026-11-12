@@ -163,9 +163,25 @@ export async function flush(storage: Storage, authed: Authed): Promise<number> {
     } catch {
       return all.length; // offline: try again later
     }
-    await writeJson(storage, QUEUE, []);
-    return 0;
+    // The batch answers 200 even for an update it only logged as an error, so each book's
+    // progress is read back, and one the server didn't take stays queued.
+    const left: Queued[] = [];
+    for (const q of all) if (!(await taken(authed, q))) left.push(q);
+    await writeJson(storage, QUEUE, left);
+    return left.length;
   });
+}
+
+// Whether the server now holds this progress (a 404: it has none for the book at all).
+async function taken(authed: Authed, q: Queued): Promise<boolean> {
+  try {
+    const res = await authed(`/api/me/progress/${encodeURIComponent(q.libraryItemId)}`);
+    if (!res.ok) return false;
+    const p = (await res.json().catch(() => null)) as { currentTime?: number; isFinished?: boolean } | null;
+    return !!p && (q.isFinished ? !!p.isFinished : Math.abs(num(p.currentTime) - q.currentTime) < 1);
+  } catch {
+    return false;
+  }
 }
 
 export const queued = async (storage: Storage) => (await readJson<Queued[]>(storage, QUEUE, [])).length;

@@ -146,6 +146,50 @@ test "play starts a session at the saved position, pauses, skips, changes chapte
   expect state sessionId == ""
   request GET "/__mock/sessions?closed=1" as reader
 
+test "pausing tells the server where we stopped, and resuming goes on from where another device left off"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect text "elapsed" == "0:45"
+  request GET "/__mock/sessions?syncs=1" as reader
+  // The phone listens on to 1:40 while this one is paused.
+  request POST "/__mock/listen?item=li_dune&at=100" as reader
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  expect text "elapsed" == "1:40"
+  // A seek back while paused stays where it was put: here the book's start, in its first track.
+  tap "play-pause"
+  clock data
+  tap "player-chapters"
+  clock settle
+  tap "chapter-0"
+  expect text "elapsed" == "0:00"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  expect state track == 0
+
 test "a legacy server's single token signs in and lists the library"
   clock data
   type "server" "http://127.0.0.1:13378"
