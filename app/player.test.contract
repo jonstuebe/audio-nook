@@ -162,3 +162,31 @@ test "the scrubber seeks where it is pressed and by arrow keys, and the volume f
   expect state volume == 0
   type "volume" key "ArrowRight"
   expect state volume == 0.1
+
+test "the playing book's cards follow the player, ahead of what the server last heard"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  expect text "book-progress-li_dune" == "38% listened"
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  tap "play-pause"
+  type "scrubber" key "ArrowRight"
+  expect text "listened" == "50%"
+  back
+  clock settle
+  back
+  clock settle
+  expect text "book-progress-li_dune" == "50% listened"

@@ -104,6 +104,13 @@ fn dlError(downloads: DownloadInfo[], id: string): string = downloads.filter(d =
 fn initials(name: string): string = name.split(" ").filter(w => w != "").map(w => w.slice(0, 1)).slice(0, 2).join("").toUpperCase()
 // Each shelf's books carry a test id prefix of their own; Continue Listening's is "continue".
 fn shelfPrefix(id: string): string = id == "continue-listening" ? "continue" : id == "recently-added" ? "recent" : id == "listen-again" ? "again" : id == "continue-series" ? "next" : id
+// The server's progress lags the book that is playing (it hears every 15 s, and the pages only
+// ask again when the book is closed): that book's cards show the player's place instead, unless
+// it is marked finished.
+fn liveBook(b: Book, id: string, p: number): Book = b.id == id and b.progress < 1 ? Book(id=b.id, title=b.title, author=b.author, cover=b.cover, duration=b.duration, progress=p, series=b.series) : b
+fn liveBooks(books: Book[], id: string, p: number): Book[] = books.map(b => liveBook(b, id, p))
+fn liveShelves(shelves: Shelf[], id: string, p: number): Shelf[] = shelves.map(sh => Shelf(id=sh.id, label=sh.label, kind=sh.kind, books=liveBooks(sh.books, id, p), series=sh.series, authors=sh.authors))
+fn liveEntries(entries: SeriesEntry[], id: string, p: number): SeriesEntry[] = entries.map(x => SeriesEntry(sequence=x.sequence, book=liveBook(x.book, id, p)))
 
 // A page's large title, as Books and Music set it in the page under the toolbar.
 component LargeTitle
