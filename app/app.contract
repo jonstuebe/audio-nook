@@ -128,7 +128,8 @@ component App
   state pendingSeek = 0
   // A seek the element hasn't finished: its time updates until then are from before it.
   state seeking = false
-  state rate = 1
+  // The speed, kept across a relaunch like the volume.
+  state rate = 1 persist
   state volume = 1 persist
   // The player's chapters: a panel beside it (or under it, narrow) that its Chapters button shows.
   state chaptersOpen = false persist
