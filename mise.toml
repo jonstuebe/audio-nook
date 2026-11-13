@@ -1,0 +1,5 @@
+# Bun is pinned to match Exact (its package.json) and the Release workflow's BUN_VERSION; bump them together.
+# Rust is not here: rustup follows the rust-toolchain.toml Exact generates in app/.exact/shells.
+# Xcode 27 is installed separately (README, "Set up Exact").
+[tools]
+bun = "1.4.2"
