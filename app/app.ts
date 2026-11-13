@@ -12,7 +12,7 @@ export const MOCK_SERVER = 'http://127.0.0.1:13378';
 // for plain http). The server URL, access and refresh tokens are kept in the Keychain.
 export const grants = [
   'net.fetch http:', 'net.fetch https:',
-  'secret.keep abs-server', 'secret.keep abs-token', 'secret.keep abs-refresh', 'secret.keep abs-user', 'secret.keep abs-ended',
+  'secret.keep abs-server', 'secret.keep abs-token', 'secret.keep abs-refresh', 'secret.keep abs-user', 'secret.keep abs-ended', 'secret.keep abs-device',
   // offline.ts: downloaded books, and progress waiting for the server.
   'fs.read app:/data/downloads', 'fs.write app:/data/downloads',
   'fs.read app:/data/progress-queue.json', 'fs.write app:/data/progress-queue.json',
@@ -117,6 +117,13 @@ async function api(store: Store, path: string, init: RequestInit = {}): Promise<
   if (!res.ok) throw new Error(`The server answered ${res.status} for ${path}.`);
   const text = await res.text();
   return text ? JSON.parse(text) : {};
+}
+
+// One authorised write whose reply has no JSON to read: ABS answers these a bare "OK"
+// (`res.sendStatus(200)`), which `api` would fail to parse after the write had landed.
+async function tell(store: Store, path: string, body: unknown, method = 'POST'): Promise<void> {
+  const res = await authed(store, path, { method, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`The server answered ${res.status} for ${path}.`);
 }
 
 const withToken = (store: Store, path: string) => {
@@ -368,7 +375,7 @@ const sources: Sources = {
   // (MeController.createUpdateMediaProgress). Show in Series: the expanded item's first series.
   markFinished: async ([id, finished], store): Promise<Reply> => {
     try {
-      await api(store, `/api/me/progress/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(finished ? { isFinished: true } : { isFinished: false, currentTime: 0, progress: 0 }) });
+      await tell(store, `/api/me/progress/${encodeURIComponent(id)}`, finished ? { isFinished: true } : { isFinished: false, currentTime: 0, progress: 0 }, 'PATCH');
       return ok;
     } catch (e) {
       return refused((e as Error).message);
@@ -547,6 +554,7 @@ const sources: Sources = {
       let at = kept.position;
       try {
         const p = (await api(store, `/api/me/progress/${encodeURIComponent(id)}`)) as Progress | null;
+        if (p) offline.sawPlace(id, num(p.currentTime));
         if (p && num(p.currentTime) > at) at = num(p.currentTime);
       } catch {}
       return {
@@ -558,7 +566,7 @@ const sources: Sources = {
     const s = (await api(store, `/api/items/${encodeURIComponent(id)}/play`, {
       method: 'POST',
       body: JSON.stringify({
-        deviceInfo: { clientName: 'Audio Nook', deviceId: 'audio-nook-mac' },
+        deviceInfo: { clientName: 'Audio Nook', deviceId: deviceId(store) },
         supportedMimeTypes: ['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/x-m4a', 'audio/wav', 'audio/flac'],
         mediaPlayer: 'audio-nook',
         forceDirectPlay: true,
@@ -567,6 +575,7 @@ const sources: Sources = {
       id: string; libraryItemId: string; displayTitle?: string; displayAuthor?: string; duration?: number; currentTime?: number;
       chapters?: unknown[]; audioTracks?: { startOffset?: number; duration?: number; contentUrl: string }[];
     };
+    offline.sawPlace(s.libraryItemId, num(s.currentTime));
     return {
       id: s.id,
       itemId: s.libraryItemId,
@@ -589,38 +598,58 @@ const sources: Sources = {
   serverPlace: async ([id], store) => {
     try {
       const p = (await api(store, `/api/me/progress/${encodeURIComponent(id)}`)) as Progress | null;
+      if (p) offline.sawPlace(id, num(p.currentTime));
       return { itemId: id, currentTime: num(p?.currentTime) };
     } catch {
       return { itemId: id, currentTime: 0 };
     }
   },
 
-  syncSession: async ([sessionId, currentTime, timeListened, duration], store, storage): Promise<Reply> => {
-    if (sessionId.startsWith('local:')) return keepLocal(store, storage, sessionId.slice(6), currentTime, duration);
-    try {
-      await api(store, `/api/session/${encodeURIComponent(sessionId)}/sync`, { method: 'POST', body: JSON.stringify({ currentTime, timeListened, duration }) });
-      return ok;
-    } catch (e) {
-      return refused((e as Error).message);
-    }
-  },
+  // `now`: the date in Unix milliseconds, from the view (a data source has no clock of its own).
+  syncSession: async ([sessionId, itemId, currentTime, timeListened, duration, now], store, storage): Promise<Reply> =>
+    sessionId.startsWith('local:') ? keepLocal(store, storage, sessionId.slice(6), currentTime, duration, now) : tellSession(store, storage, 'sync', sessionId, itemId, currentTime, timeListened, duration, now),
 
-  closeSession: async ([sessionId, currentTime, timeListened, duration], store, storage): Promise<Reply> => {
-    if (sessionId.startsWith('local:')) return keepLocal(store, storage, sessionId.slice(6), currentTime, duration);
-    try {
-      await api(store, `/api/session/${encodeURIComponent(sessionId)}/close`, { method: 'POST', body: JSON.stringify({ currentTime, timeListened, duration }) });
-      return ok;
-    } catch (e) {
-      return refused((e as Error).message);
-    }
-  },
+  closeSession: async ([sessionId, itemId, currentTime, timeListened, duration, now], store, storage): Promise<Reply> =>
+    sessionId.startsWith('local:') ? keepLocal(store, storage, sessionId.slice(6), currentTime, duration, now) : tellSession(store, storage, 'close', sessionId, itemId, currentTime, timeListened, duration, now),
+};
+
+// This install's name to the server. ABS closes a device's open session when the same device
+// starts another, so two installs sharing one id would end each other's sessions.
+function deviceId(store: Store): string {
+  let id = store.get('abs-device');
+  if (!id) {
+    id = `audio-nook-${crypto.randomUUID()}`;
+    store.set('abs-device', id);
+  }
+  return id;
+}
+
+// A streamed book's place, told to its session. A session the server no longer has (it keeps
+// them in memory, so a restart forgets them all: a 404) or can't be reached must not lose the
+// place: it is queued as plain progress, sent now if the server answers and again until it does.
+async function tellSession(store: Store, storage: Storage, verb: 'sync' | 'close', sessionId: string, itemId: string, currentTime: number, timeListened: number, duration: number, now: number): Promise<Reply> {
+  try {
+    await tell(store, `/api/session/${encodeURIComponent(sessionId)}/${verb}`, { currentTime, timeListened, duration });
+  } catch (e) {
+    if (!itemId) return refused((e as Error).message);
+    await queueProgress(store, storage, itemId, currentTime, duration, now);
+    return ok;
+  }
+  // The server has this place now: an older one still waiting would only move it back.
+  offline.sawPlace(itemId, currentTime);
+  await offline.unqueue(storage, itemId).catch(() => undefined);
+  return ok;
+}
+
+const queueProgress = (store: Store, storage: Storage, id: string, currentTime: number, duration: number, now: number) => {
+  const progress = duration ? Math.min(1, currentTime / duration) : 0;
+  return offline.queue(storage, authedFor(store), { libraryItemId: id, currentTime, duration, progress, isFinished: progress >= 0.999, at: Math.round(now) });
 };
 
 // A downloaded book's place: kept beside it, and queued for the server.
-async function keepLocal(store: Store, storage: Storage, id: string, currentTime: number, duration: number): Promise<Reply> {
+async function keepLocal(store: Store, storage: Storage, id: string, currentTime: number, duration: number, now: number): Promise<Reply> {
   await offline.remember(storage, id, currentTime);
-  const progress = duration ? Math.min(1, currentTime / duration) : 0;
-  await offline.queue(storage, authedFor(store), { libraryItemId: id, currentTime, duration, progress, isFinished: progress >= 0.999 });
+  await queueProgress(store, storage, id, currentTime, duration, now);
   return ok;
 }
 

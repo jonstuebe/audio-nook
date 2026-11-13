@@ -68,6 +68,10 @@ shape Place
   itemId: string
   currentTime: number
 
+// The date: `time.epochAtZero + performanceNow()` is now, in Unix milliseconds.
+shape Time
+  epochAtZero: number
+
 shape PlaySession
   id: string
   itemId: string
@@ -146,6 +150,7 @@ component App
   state mediaRetried = false
 
   resource session = session() as shape Session else empty()
+  resource time = exactTime() as shape Time
   // "" while signed out, so a sign-in (even to the same server) asks every resource again.
   derive api = session.signedIn ? session.server : ""
   resource libraries = libraries(api) as shape Library[] else empty()
@@ -234,7 +239,8 @@ component App
   // A download moves a track per step while one is in progress.
   task fetchTracks when activeDownload != ""
     every(250, pumpDownload)
-  // Progress kept while offline goes to the server as soon as it answers.
+  // Progress the server hasn't taken (listened to offline, or a sync that failed) is sent again
+  // until it answers.
   task sendQueued when pending.count > 0 and session.signedIn
     every(30000, flushNow)
 
@@ -489,7 +495,7 @@ component App
 
   action syncNow
     if sessionId != ""
-      send synced = syncSession(sessionId, position, max(0, min(position - lastSynced, 60)), duration)
+      send synced = syncSession(sessionId, nowItem, position, max(0, min(position - lastSynced, 60)), duration, time.epochAtZero + performanceNow())
       lastSynced = position
   // Not while a sync is on its way: the server's answer would be from before it.
   action checkPlace
@@ -509,7 +515,7 @@ component App
         lastSynced = lastSynced
   action closeCurrent
     if sessionId != ""
-      send closed = closeSession(sessionId, position, max(0, min(position - lastSynced, 60)), duration)
+      send closed = closeSession(sessionId, nowItem, position, max(0, min(position - lastSynced, 60)), duration, time.epochAtZero + performanceNow())
   action stopPlayback
     closeCurrent()
     paused = true
