@@ -11,7 +11,11 @@
 // Progress made while playing a downloaded book is kept in app:/data/progress-queue.json, one
 // entry a book (the newest wins), and sent with PATCH /api/me/progress/batch/update
 // (MeController.batchUpdateMediaProgress: an array of { libraryItemId, currentTime, duration,
-// progress, isFinished }) whenever the server answers; what it can't take stays queued.
+// progress, isFinished }) whenever the server answers; what it can't take stays queued. A streamed
+// book's place joins the queue too when its session's sync fails (app.ts): the server restarted
+// and forgot the session, or couldn't be reached. Each entry says when it was listened to (`at`),
+// and where the server then had the book as far as this app knew (`base`), so one that waited is
+// dropped if another device has moved the book on since.
 import type { Storage } from './app.contract.d.ts';
 import { htmlToText } from './text.ts';
 
@@ -27,7 +31,7 @@ export type Entry = {
   duration: number; chapters: Chapter[]; tracks: Track[]; cover: string;
   state: 'downloading' | 'done' | 'failed'; error: string; position: number;
 };
-export type Queued = { libraryItemId: string; currentTime: number; duration: number; progress: number; isFinished: boolean };
+export type Queued = { libraryItemId: string; currentTime: number; duration: number; progress: number; isFinished: boolean; at?: number; base?: number };
 
 /** A fetch through the sign-in: refreshed and asked again once on a 401 (app.ts's). */
 export type Authed = (path: string, init?: RequestInit) => Promise<Response>;
@@ -143,33 +147,72 @@ export async function remove(storage: Storage, id: string): Promise<void> {
 export const remember = (storage: Storage, id: string, position: number) =>
   update(storage, (all) => { if (all[id]) all[id].position = position; });
 
+// Where the server has each book, as far as this app has seen: the place a session began at or
+// took, or the server answered when asked. A queued entry carries it as its `base`.
+const seen = new Map<string, number>();
+export const sawPlace = (id: string, currentTime: number) => { seen.set(id, currentTime); };
+
 /** Queues one book's progress (replacing what was queued for it) and sends the queue. */
 export async function queue(storage: Storage, authed: Authed, item: Queued): Promise<number> {
   await locked(async () => {
     const all = (await readJson<Queued[]>(storage, QUEUE, [])).filter((q) => q.libraryItemId !== item.libraryItemId);
-    await writeJson(storage, QUEUE, [...all, item]);
+    await writeJson(storage, QUEUE, [...all, { ...item, base: seen.get(item.libraryItemId) }]);
   });
-  return flush(storage, authed);
+  return flush(storage, authed, item.libraryItemId);
 }
 
-/** Sends what is queued; what the server can't take now stays. Answers how many remain. */
-export async function flush(storage: Storage, authed: Authed): Promise<number> {
+/** Forgets what is queued for a book: the server has just taken a newer place for it. */
+export const unqueue = (storage: Storage, id: string) =>
+  locked(async () => {
+    const all = await readJson<Queued[]>(storage, QUEUE, []);
+    if (all.some((q) => q.libraryItemId === id)) await writeJson(storage, QUEUE, all.filter((q) => q.libraryItemId !== id));
+  });
+
+/** Sends what is queued; what the server can't take now stays. Answers how many remain.
+ * `fresh` names the book whose place was queued this moment: it is being listened to here and
+ * now, so it is sent as a session's sync would be. An entry that waited is first checked
+ * against the server, and dropped when another device has moved the book on since. */
+export async function flush(storage: Storage, authed: Authed, fresh = ''): Promise<number> {
   return locked(async () => {
     const all = await readJson<Queued[]>(storage, QUEUE, []);
     if (!all.length) return 0;
+    const sending: Queued[] = [];
     try {
-      const res = await authed('/api/me/progress/batch/update', { method: 'PATCH', body: JSON.stringify(all) });
-      if (!res.ok) return all.length;
+      for (const q of all) if (q.libraryItemId === fresh || !(await overtaken(authed, q))) sending.push(q);
+      if (sending.length) {
+        // `lastUpdate`: when it was listened to, as ABS's own apps send for local progress.
+        const body = sending.map(({ at, base, ...q }) => (at ? { ...q, lastUpdate: at } : q));
+        const res = await authed('/api/me/progress/batch/update', { method: 'PATCH', body: JSON.stringify(body) });
+        if (!res.ok) return all.length;
+      }
     } catch {
       return all.length; // offline: try again later
     }
     // The batch answers 200 even for an update it only logged as an error, so each book's
     // progress is read back, and one the server didn't take stays queued.
     const left: Queued[] = [];
-    for (const q of all) if (!(await taken(authed, q))) left.push(q);
+    for (const q of sending) {
+      if (await taken(authed, q)) sawPlace(q.libraryItemId, q.currentTime);
+      else left.push(q);
+    }
     await writeJson(storage, QUEUE, left);
     return left.length;
   });
+}
+
+// Whether another device has moved this book on since the entry was queued: the server's
+// place is no longer the one this app last saw there, and was put there later. (The place is
+// compared first because the two clocks may disagree: a server whose clock runs ahead stamps
+// this app's own last sync as later than everything queued after it.) Throws when the server
+// can't say, so the entry stays queued.
+async function overtaken(authed: Authed, q: Queued): Promise<boolean> {
+  if (!q.at) return false;
+  const res = await authed(`/api/me/progress/${encodeURIComponent(q.libraryItemId)}`);
+  if (res.status === 404) return false; // no progress there at all
+  if (!res.ok) throw new Error(`The server answered ${res.status}.`);
+  const p = (await res.json().catch(() => null)) as { currentTime?: number; lastUpdate?: number } | null;
+  if (q.base !== undefined && Math.abs(num(p?.currentTime) - q.base) < 1) return false;
+  return num(p?.lastUpdate) > q.at;
 }
 
 // Whether the server now holds this progress (a 404: it has none for the book at all).

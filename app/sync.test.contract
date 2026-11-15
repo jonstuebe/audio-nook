@@ -1,0 +1,199 @@
+// Progress reaching the server when a session's sync can't: the place a streamed book is at must
+// get there whether the server forgot the session, was out of reach for a while, or heard from
+// another device meanwhile. Each test streams Dune (45 s in), pauses, moves on 30 s paused (the
+// virtual clock plays no audio), then plays and pauses again, which syncs 1:15.
+// `/__mock/progress?item&at&below&batches=0` answers 200 when the server holds a place in that range.
+
+size 1100x800
+
+test "a session the server forgot (a restart) still gets the book's place"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect text "elapsed" == "0:45"
+  request GET "/__mock/progress?item=li_dune&at=45&below=46&batches=0" as reader
+  // The server restarts: it keeps open sessions in memory, so this one's syncs now answer 404.
+  request POST "/__mock/forget-sessions" as reader
+  tap "forward-30"
+  expect text "elapsed" == "1:15"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=75&below=76&batches=0" as reader
+  // And goes on getting it: the next sync, and the close when the book is stopped.
+  tap "forward-30"
+  expect text "elapsed" == "1:45"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  request GET "/__mock/progress?item=li_dune&at=105&below=106&batches=0" as reader
+  tap "back-30"
+  tap "stop"
+  clock data
+  clock settle
+  expect state sessionId == ""
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=75&below=76&batches=0" as reader
+
+test "a sync the server couldn't be reached for is kept, and sent when it is back"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect text "elapsed" == "0:45"
+  fail fetch "http://127.0.0.1:13378"
+  tap "forward-30"
+  expect text "elapsed" == "1:15"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 1
+  pass fetch "http://127.0.0.1:13378"
+  request GET "/__mock/progress?item=li_dune&at=45&below=46&batches=0" as reader
+  clock +30000
+  clock data
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=75&below=76&batches=0" as reader
+
+test "a later sync that lands replaces the one that was kept, which is not sent after it"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect text "elapsed" == "0:45"
+  // The kept place can't get there by itself in this test: the server drops what the queue sends.
+  request POST "/__mock/drop-batches?n=9" as reader
+  fail fetch "http://127.0.0.1:13378"
+  tap "forward-30"
+  expect text "elapsed" == "1:15"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 1
+  pass fetch "http://127.0.0.1:13378"
+  tap "forward-30"
+  expect text "elapsed" == "1:45"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=105&below=106&batches=0" as reader
+  request POST "/__mock/drop-batches?n=0" as reader
+  clock +30000
+  clock data
+  request GET "/__mock/progress?item=li_dune&at=105&below=106&batches=0" as reader
+
+test "a kept sync is dropped when another device has listened on since"
+  request POST "/__mock/reset" as reader
+  clock data
+  type "server" "http://127.0.0.1:13378"
+  type "username" "reader"
+  type "password" "listen"
+  tap "sign-in-button"
+  clock data
+  clock settle
+  tap "tab-library-lib_books"
+  clock data
+  clock settle
+  tap "book-li_dune"
+  clock data
+  clock settle
+  tap "play"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect text "elapsed" == "0:45"
+  fail fetch "http://127.0.0.1:13378"
+  tap "forward-30"
+  expect text "elapsed" == "1:15"
+  tap "play-pause"
+  clock data
+  clock settle
+  expect state paused == false
+  tap "play-pause"
+  clock data
+  expect state paused == true
+  expect state pending.count == 1
+  pass fetch "http://127.0.0.1:13378"
+  // The phone listens on to 1:40 before this one reaches the server again.
+  request POST "/__mock/listen?item=li_dune&at=100" as reader
+  clock +30000
+  clock data
+  expect state pending.count == 0
+  request GET "/__mock/progress?item=li_dune&at=100&below=101&batches=0" as reader

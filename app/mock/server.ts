@@ -219,6 +219,11 @@ async function route(req: Request): Promise<Response> {
       droppedBatches = 0;
       return json({ reset: true });
     }
+    // A restart: ABS keeps open sessions in memory, so it knows none of them afterwards.
+    if (path === '/__mock/forget-sessions' && method === 'POST') {
+      sessions.clear();
+      return json({ forgotten: true });
+    }
     if (path === '/__mock/drop-batches' && method === 'POST') {
       droppedBatches = Number(url.searchParams.get('n') ?? 1);
       return json({ dropped: droppedBatches });
@@ -235,11 +240,11 @@ async function route(req: Request): Promise<Response> {
       return json({ revoked: true });
     }
     // What PATCH /api/me/progress/batch/update has been sent: 200 when `item` has been synced at
-    // or past `at` seconds, at least `batches` times.
+    // or past `at` seconds (and before `below`, when given), at least `batches` times.
     if (path === '/__mock/progress') {
       const item = url.searchParams.get('item') ?? '', at = Number(url.searchParams.get('at') ?? 0);
       const p = progress.get(item);
-      const ok = counts.progressBatches >= Number(url.searchParams.get('batches') ?? 1) && !!p && p.currentTime >= at;
+      const ok = counts.progressBatches >= Number(url.searchParams.get('batches') ?? 1) && !!p && p.currentTime >= at && p.currentTime < Number(url.searchParams.get('below') ?? Infinity);
       return json({ batches: counts.progressBatches, progress: p ?? null }, ok ? 200 : 404);
     }
     if (path === '/__mock/auth') {
@@ -269,13 +274,13 @@ async function route(req: Request): Promise<Response> {
     if (!authed(req, url)) return new Response('Unauthorized', { status: 401 });
     // MeController.batchUpdateMediaProgress / createUpdateMediaProgress / getMediaProgress.
     if (path === '/api/me/progress/batch/update' && method === 'PATCH') {
-      const items = (await req.json().catch(() => [])) as { libraryItemId?: string; currentTime?: number; progress?: number }[];
+      const items = (await req.json().catch(() => [])) as { libraryItemId?: string; currentTime?: number; progress?: number; lastUpdate?: number }[];
       if (!Array.isArray(items) || !items.length) return new Response('Missing request payload', { status: 400 });
       if (droppedBatches > 0) {
         droppedBatches--;
         return new Response('OK');
       }
-      for (const it of items) if (it.libraryItemId && typeof it.currentTime === 'number') progress.set(it.libraryItemId, { currentTime: it.currentTime, progress: it.progress ?? 0, lastUpdate: Date.now() });
+      for (const it of items) if (it.libraryItemId && typeof it.currentTime === 'number') progress.set(it.libraryItemId, { currentTime: it.currentTime, progress: it.progress ?? 0, lastUpdate: it.lastUpdate ?? Date.now() });
       counts.progressBatches++;
       return new Response('OK');
     }
