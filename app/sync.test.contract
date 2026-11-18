@@ -3,6 +3,8 @@
 // another device meanwhile. Each test streams Dune (45 s in), pauses, moves on 30 s paused (the
 // virtual clock plays no audio), then plays and pauses again, which syncs 1:15.
 // `/__mock/progress?item&at&below&batches=0` answers 200 when the server holds a place in that range.
+// The player's ranges are half a second either side of its place: macOS reports a paused place a
+// fraction of a second either side of where it was sent (44.8 for 45), the web just past it.
 
 size 1100x800
 
@@ -29,7 +31,7 @@ test "a session the server forgot (a restart) still gets the book's place"
   clock data
   expect state paused == true
   expect text "elapsed" == "0:45"
-  request GET "/__mock/progress?item=li_dune&at=45&below=46&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=44.5&below=45.5&batches=0" as reader
   // The server restarts: it keeps open sessions in memory, so this one's syncs now answer 404.
   request POST "/__mock/forget-sessions" as reader
   tap "forward-30"
@@ -42,7 +44,7 @@ test "a session the server forgot (a restart) still gets the book's place"
   clock data
   expect state paused == true
   expect state pending.count == 0
-  request GET "/__mock/progress?item=li_dune&at=75&below=76&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=74.5&below=75.5&batches=0" as reader
   // And goes on getting it: the next sync, and the close when the book is stopped.
   tap "forward-30"
   expect text "elapsed" == "1:45"
@@ -53,14 +55,14 @@ test "a session the server forgot (a restart) still gets the book's place"
   tap "play-pause"
   clock data
   expect state paused == true
-  request GET "/__mock/progress?item=li_dune&at=105&below=106&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=104.5&below=105.5&batches=0" as reader
   tap "back-30"
   tap "stop"
   clock data
   clock settle
   expect state sessionId == ""
   expect state pending.count == 0
-  request GET "/__mock/progress?item=li_dune&at=75&below=76&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=74.5&below=75.5&batches=0" as reader
 
 test "a sync the server couldn't be reached for is kept, and sent when it is back"
   request POST "/__mock/reset" as reader
@@ -97,11 +99,11 @@ test "a sync the server couldn't be reached for is kept, and sent when it is bac
   expect state paused == true
   expect state pending.count == 1
   pass fetch "http://127.0.0.1:13378"
-  request GET "/__mock/progress?item=li_dune&at=45&below=46&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=44.5&below=45.5&batches=0" as reader
   clock +30000
   clock data
   expect state pending.count == 0
-  request GET "/__mock/progress?item=li_dune&at=75&below=76&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=74.5&below=75.5&batches=0" as reader
 
 test "a later sync that lands replaces the one that was kept, which is not sent after it"
   request POST "/__mock/reset" as reader
@@ -150,11 +152,11 @@ test "a later sync that lands replaces the one that was kept, which is not sent 
   clock data
   expect state paused == true
   expect state pending.count == 0
-  request GET "/__mock/progress?item=li_dune&at=105&below=106&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=104.5&below=105.5&batches=0" as reader
   request POST "/__mock/drop-batches?n=0" as reader
   clock +30000
   clock data
-  request GET "/__mock/progress?item=li_dune&at=105&below=106&batches=0" as reader
+  request GET "/__mock/progress?item=li_dune&at=104.5&below=105.5&batches=0" as reader
 
 test "a kept sync is dropped when another device has listened on since"
   request POST "/__mock/reset" as reader
